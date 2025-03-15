@@ -7,8 +7,10 @@ use Payment;
 use ProviderInterface;
 use Status;
 use Stripe\Checkout\Session;
+use Stripe\Exception\SignatureVerificationException;
 use Stripe\PaymentIntent;
 use Stripe\Refund;
+use Stripe\Webhook;
 use Throwable;
 
 class Stripe extends Base implements ProviderInterface {
@@ -61,22 +63,7 @@ class Stripe extends Base implements ProviderInterface {
 			throw new GatewayException($e->getMessage());
 		}
 
-		switch ($paymentIntent->status) {
-			case 'canceled':
-				$payment->status = Status::Failed;
-				break;
-			case 'requires_action':
-			case 'requires_payment_method':
-			case 'requires_confirmation':
-			case 'processing':
-				$payment->status = Status::Pending;
-				break;
-			case 'succeeded':
-				$payment->status = Status::Succeeded;
-				break;
-			default:
-				$payment->status = Status::Failed;
-		}
+		$payment->status = $this->mapStatus($paymentIntent->status);
 		return $payment->status;
 	}
 
@@ -95,6 +82,56 @@ class Stripe extends Base implements ProviderInterface {
 			Refund::create($options);
 		} catch (Throwable $e) {
 			throw new GatewayException($e->getMessage());
+		}
+	}
+
+	/**
+	 * @throws GatewayException
+	 */
+	public function getStatusFromWebhook(Payment $payment, string $payload = ''): Status {
+		\Stripe\Stripe::setApiKey($this->credentials['secret_key']);
+		try {
+			// Verify the webhook signature
+			$event = Webhook::constructEvent(
+				$payload,
+				$_SERVER['HTTP_STRIPE_SIGNATURE'],
+				$this->credentials['webhook_secret']
+			);
+
+			// Check if the event is related to a Payment Intent
+			if ($event->type === 'payment_intent.succeeded' ||
+				$event->type === 'payment_intent.payment_failed' ||
+				$event->type === 'payment_intent.processing' ||
+				$event->type === 'payment_intent.canceled') {
+
+				$paymentIntent = $event->data->object;
+
+				$status = $paymentIntent->status;
+
+				return $this->mapStatus(str_replace('payment_intent.', '', $status));
+			}
+
+			// If the event is not related to a Payment Intent, do nothing
+			return $payment->status;
+
+		} catch (SignatureVerificationException|\Exception $e) {
+			throw new GatewayException($e->getMessage());
+		}
+	}
+
+	private function mapStatus(string $status): Status {
+		switch ($status) {
+			case 'canceled':
+				return Status::Failed;
+			case 'requires_action':
+			case 'requires_payment_method':
+			case 'requires_confirmation':
+			case 'processing':
+				return Status::Pending;
+			case 'succeeded':
+				return Status::Succeeded;
+			default:
+				return Status::Failed;
 		}
 	}
 

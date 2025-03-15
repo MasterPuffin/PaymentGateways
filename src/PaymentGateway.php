@@ -3,6 +3,7 @@
 use Exceptions\GatewayException;
 use Exceptions\InvalidCredentialsException;
 use Exceptions\InvalidOptionsException;
+use Exceptions\NotImplementedException;
 use Providers\Offline;
 use Providers\PayPal;
 use Providers\Stripe;
@@ -25,6 +26,7 @@ class PaymentGateway {
 			case Provider::Stripe:
 				$this->providerClass = new Stripe();
 				if (!array_key_exists('secret_key', $credentials)) throw new InvalidCredentialsException("secret_key is required");
+				if (!array_key_exists('webhook_secret', $credentials)) throw new InvalidCredentialsException("webhook_secret is required");
 				break;
 			case Provider::Offline:
 				$this->providerClass = new Offline();
@@ -50,9 +52,29 @@ class PaymentGateway {
 	/**
 	 * @throws InvalidOptionsException
 	 */
-	public function execute(Payment $payment) {
+	public function execute(Payment $payment): Status {
 		if (empty($payment->providerId)) throw new InvalidOptionsException("providerId is required");
 		return $this->providerClass->execute($payment);
+	}
+
+	/**
+	 * @throws InvalidOptionsException
+	 * @throws NotImplementedException
+	 * @throws GatewayException
+	 */
+	public function refund(Payment $payment, ?float $amount = null): void {
+		if (empty($payment->providerId)) throw new InvalidOptionsException("providerId is required");
+		$this->providerClass->refund($payment, $amount);
+	}
+
+	/**
+	 * @throws InvalidOptionsException
+	 * @throws NotImplementedException
+	 * @throws GatewayException
+	 */
+	public function getStatusFromWebhook(Payment $payment, string $payload): Status {
+		if (empty($payment->providerId)) throw new InvalidOptionsException("providerId is required");
+		return $this->providerClass->getStatusFromWebhook($payment, $payload);
 	}
 
 	public function setSuccessUrl(string $url): void {
