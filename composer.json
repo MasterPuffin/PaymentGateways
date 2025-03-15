@@ -1,0 +1,21 @@
+{
+    "name": "masterpuffin/payment-gateways",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Masterpuffin\\PaymentGateways\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Johannes Bluhm",
+            "email": "github@pxmo.de"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {
+        "stripe/stripe-php": "^16.6",
+        "paypal/paypal-server-sdk": "0.6.1"
+    }
+}
