@@ -13,9 +13,11 @@ use PaypalServerSdkLib\Logging\LoggingConfigurationBuilder;
 use PaypalServerSdkLib\Logging\RequestLoggingConfigurationBuilder;
 use PaypalServerSdkLib\Logging\ResponseLoggingConfigurationBuilder;
 use PaypalServerSdkLib\Models\Builders\AmountWithBreakdownBuilder;
+use PaypalServerSdkLib\Models\Builders\OrderApplicationContextBuilder;
 use PaypalServerSdkLib\Models\Builders\OrderRequestBuilder;
 use PaypalServerSdkLib\Models\Builders\PurchaseUnitRequestBuilder;
 use PaypalServerSdkLib\Models\CheckoutPaymentIntent;
+use PaypalServerSdkLib\Models\OrderApplicationContextUserAction;
 use PaypalServerSdkLib\PaypalServerSdkClientBuilder;
 use Psr\Log\LogLevel;
 
@@ -46,11 +48,22 @@ class PayPal extends Base implements ProviderInterface {
 						)->build()
 					)->build()
 				]
-			)->build(),
+			)
+				->applicationContext(
+					OrderApplicationContextBuilder::init()
+						->returnUrl($this->successUrl)
+						->cancelUrl($this->cancelUrl)
+						->userAction(OrderApplicationContextUserAction::PAY_NOW)
+						->build()
+				)
+				->build(),
 			'prefer' => 'return=minimal'
 		];
 		$ordersController = $client->getOrdersController();
 		$apiResponse = $ordersController->ordersCreate($collect);
+		if (is_array($apiResponse->getResult())) {
+			throw new GatewayException($apiResponse->getResult()['message']);
+		}
 		foreach ($apiResponse->getResult()->getLinks() as $link) {
 			if ($link->getRel() === 'approve') {
 				return $link->getHref();
