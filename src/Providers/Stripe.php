@@ -1,11 +1,11 @@
 <?php
 
-namespace Providers;
+namespace MasterPuffin\PaymentGateways\Providers;
 
-use Exceptions\GatewayException;
-use Payment;
-use ProviderInterface;
-use Status;
+use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
+use MasterPuffin\PaymentGateways\Payment;
+use MasterPuffin\PaymentGateways\ProviderInterface;
+use MasterPuffin\PaymentGateways\Status;
 use Stripe\Checkout\Session;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\PaymentIntent;

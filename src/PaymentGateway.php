@@ -1,12 +1,15 @@
 <?php
 
-use Exceptions\GatewayException;
-use Exceptions\InvalidCredentialsException;
-use Exceptions\InvalidOptionsException;
-use Exceptions\NotImplementedException;
-use Providers\Offline;
-use Providers\PayPal;
-use Providers\Stripe;
+namespace MasterPuffin\PaymentGateways;
+
+
+use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
+use MasterPuffin\PaymentGateways\Exceptions\InvalidCredentialsException;
+use MasterPuffin\PaymentGateways\Exceptions\InvalidOptionsException;
+use MasterPuffin\PaymentGateways\Exceptions\NotImplementedException;
+use MasterPuffin\PaymentGateways\Providers\Offline;
+use MasterPuffin\PaymentGateways\Providers\PayPal;
+use MasterPuffin\PaymentGateways\Providers\Stripe;
 
 class PaymentGateway {
 	private object $providerClass;

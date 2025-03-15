@@ -1,6 +1,6 @@
 <?php
 
-namespace Providers;
+namespace MasterPuffin\PaymentGateways\Providers;
 
 class Base {
 	public array $credentials;
