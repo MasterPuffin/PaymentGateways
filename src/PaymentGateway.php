@@ -37,6 +37,7 @@ class PaymentGateway {
 			default:
 				throw new InvalidCredentialsException("Invalid provider");
 		}
+		$this->provider = $provider;
 		$this->providerClass->credentials = $credentials;
 		$this->providerClass->options = $options;
 	}

@@ -18,10 +18,10 @@ class Stripe extends Base implements ProviderInterface {
 	/**
 	 * @throws GatewayException
 	 */
-	public function create(Payment $payment): null {
+	public function create(Payment $payment): string {
 		\Stripe\Stripe::setApiKey($this->credentials['secret_key']);
 
-		$line_items = [
+		$line_items = [[
 			'price_data' => [
 				'currency' => strtolower($payment->getCurrencyCode()),
 				'product_data' => [
@@ -30,7 +30,7 @@ class Stripe extends Base implements ProviderInterface {
 				'unit_amount' => (int)($payment->getAmount() * 100),
 			],
 			'quantity' => 1
-		];
+		]];
 		$options = [
 			'customer_email' => $payment->getCustomer()->getEmail(),
 			'line_items' => $line_items,
