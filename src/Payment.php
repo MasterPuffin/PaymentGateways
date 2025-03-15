@@ -3,6 +3,7 @@
 class Payment {
 	public string $id;
 	public Provider $provider;
+	public ?string $providerId = null;
 	public float $amount = 0.0;
 	public string $currencyCode = 'EUR';
 	public string $description = '';
