@@ -1,5 +1,6 @@
 <?php
 
+namespace MasterPuffin\PaymentGateways;
 interface ProviderInterface {
 	public function create(Payment $payment): ?string;
 

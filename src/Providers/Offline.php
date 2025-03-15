@@ -1,11 +1,12 @@
 <?php
 
-namespace Providers;
+namespace MasterPuffin\PaymentGateways\Providers;
 
-use Exceptions\NotImplementedException;
-use Payment;
-use ProviderInterface;
-use Status;
+
+use MasterPuffin\PaymentGateways\Exceptions\NotImplementedException;
+use MasterPuffin\PaymentGateways\Payment;
+use MasterPuffin\PaymentGateways\ProviderInterface;
+use MasterPuffin\PaymentGateways\Status;
 
 class Offline extends Base implements ProviderInterface {
 	public function create(Payment $payment): string {

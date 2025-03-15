@@ -1,5 +1,6 @@
 <?php
 
+namespace MasterPuffin\PaymentGateways;
 class Payment {
 	private string $id;
 	private Provider $provider;

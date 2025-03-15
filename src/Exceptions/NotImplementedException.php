@@ -1,6 +1,6 @@
 <?php
 
-namespace Exceptions;
+namespace MasterPuffin\PaymentGateways\Exceptions;
 
 use Exception;
 
