@@ -38,8 +38,8 @@ class PaymentGateway {
 				throw new InvalidCredentialsException("Invalid provider");
 		}
 		$this->provider = $provider;
-		$this->providerClass->credentials = $credentials;
-		$this->providerClass->options = $options;
+		$this->providerClass->setCredentials($credentials);
+		$this->providerClass->setOptions($options);
 	}
 
 	/**
@@ -47,8 +47,8 @@ class PaymentGateway {
 	 * @throws GatewayException
 	 */
 	public function create(Payment $payment) {
-		if (empty($this->providerClass->successUrl)) throw new InvalidOptionsException("successUrl is required");
-		if (empty($this->providerClass->cancelUrl)) throw new InvalidOptionsException("cancelUrl is required");
+		if (empty($this->providerClass->getSuccessUrl())) throw new InvalidOptionsException("successUrl is required");
+		if (empty($this->providerClass->getCancelUrl())) throw new InvalidOptionsException("cancelUrl is required");
 		$payment->setProvider($this->provider);
 		return $this->providerClass->create($payment);
 	}
@@ -82,10 +82,14 @@ class PaymentGateway {
 	}
 
 	public function setSuccessUrl(string $url): void {
-		$this->providerClass->successUrl = $url;
+		$this->providerClass->setSuccessUrl($url);
 	}
 
 	public function setCancelUrl(string $url): void {
-		$this->providerClass->cancelUrl = $url;
+		$this->providerClass->setCancelUrl($url);
+	}
+
+	public function setSandbox(bool $sandbox): void {
+		$this->providerClass->setSandbox($sandbox);
 	}
 }

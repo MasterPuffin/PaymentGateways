@@ -2,6 +2,7 @@
 
 namespace MasterPuffin\PaymentGateways\Providers;
 
+use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Exceptions\NotImplementedException;
 use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\ProviderInterface;
@@ -18,7 +19,7 @@ use PaypalServerSdkLib\Models\CheckoutPaymentIntent;
 use PaypalServerSdkLib\PaypalServerSdkClientBuilder;
 use Psr\Log\LogLevel;
 
-class PayPal implements ProviderInterface {
+class PayPal extends Base implements ProviderInterface {
 	/**
 	 * @param Payment $payment
 	 */
@@ -27,17 +28,11 @@ class PayPal implements ProviderInterface {
 		$client = PaypalServerSdkClientBuilder::init()
 			->clientCredentialsAuthCredentials(
 				ClientCredentialsAuthCredentialsBuilder::init(
-					'OAuthClientId',
-					'OAuthClientSecret'
+					$this->credentials['client_id'],
+					$this->credentials['client_secret']
 				)
 			)
-			->environment(Environment::SANDBOX)
-			->loggingConfiguration(
-				LoggingConfigurationBuilder::init()
-					->level(LogLevel::INFO)
-					->requestConfiguration(RequestLoggingConfigurationBuilder::init()->body(true))
-					->responseConfiguration(ResponseLoggingConfigurationBuilder::init()->headers(true))
-			)
+			->environment($this->sandbox ? Environment::SANDBOX : Environment::PRODUCTION)
 			->build();
 
 		$collect = [
@@ -46,8 +41,8 @@ class PayPal implements ProviderInterface {
 				[
 					PurchaseUnitRequestBuilder::init(
 						AmountWithBreakdownBuilder::init(
-							'currency_code6',
-							'value0'
+							$payment->getCurrencyCode(),
+							$payment->getAmount()
 						)->build()
 					)->build()
 				]
@@ -56,7 +51,12 @@ class PayPal implements ProviderInterface {
 		];
 		$ordersController = $client->getOrdersController();
 		$apiResponse = $ordersController->ordersCreate($collect);
-		return '';
+		foreach ($apiResponse->getResult()->getLinks() as $link) {
+			if ($link->getRel() === 'approve') {
+				return $link->getHref();
+			}
+		}
+		throw new GatewayException("PayPal API returned no approve link");
 	}
 
 	/**
