@@ -8,4 +8,9 @@ class Payment {
 	public string $description = '';
 	public array $metadata = [];
 	public Status $status = Status::Open;
+	public Customer $customer;
+
+	public function __construct() {
+		$this->customer = new Customer();
+	}
 }

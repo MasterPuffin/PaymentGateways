@@ -8,9 +8,9 @@ use ProviderInterface;
 use Status;
 
 class Offline extends Base implements ProviderInterface {
-	public function create(Payment $payment): null {
+	public function create(Payment $payment): string {
 		$this->payment = $payment;
-		return null;
+		return $this->successUrl;
 	}
 
 	public function execute(): null {
