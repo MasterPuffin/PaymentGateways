@@ -47,8 +47,12 @@ class PaymentGateway {
 		return $this->providerClass->create($payment);
 	}
 
-	public function execute() {
-		return $this->providerClass->execute();
+	/**
+	 * @throws InvalidOptionsException
+	 */
+	public function execute(Payment $payment) {
+		if (empty($payment->providerId)) throw new InvalidOptionsException("providerId is required");
+		return $this->providerClass->execute($payment);
 	}
 
 	public function setSuccessUrl(string $url): void {
