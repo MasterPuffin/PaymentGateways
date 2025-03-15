@@ -1,5 +1,9 @@
 <?php
 
+use MasterPuffin\PaymentGateways\Payment;
+use MasterPuffin\PaymentGateways\PaymentGateway;
+use MasterPuffin\PaymentGateways\Provider;
+
 $payment = new Payment();
 $payment->setAmount(123.45);
 $payment->setCurrencyCode('EUR');
