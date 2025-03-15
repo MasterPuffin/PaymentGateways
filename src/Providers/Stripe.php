@@ -23,21 +23,21 @@ class Stripe extends Base implements ProviderInterface {
 
 		$line_items = [
 			'price_data' => [
-				'currency' => strtolower($payment->currencyCode),
+				'currency' => strtolower($payment->getCurrencyCode()),
 				'product_data' => [
-					'name' => $payment->description,
+					'name' => $payment->getDescription(),
 				],
-				'unit_amount' => (int)($payment->amount * 100),
+				'unit_amount' => (int)($payment->getAmount() * 100),
 			],
 			'quantity' => 1
 		];
 		$options = [
-			'customer_email' => $payment->customer->email,
+			'customer_email' => $payment->getCustomer()->getEmail(),
 			'line_items' => $line_items,
 			'mode' => 'payment',
 			'success_url' => $this->successUrl,
 			'cancel_url' => $this->cancelUrl,
-			'metadata' => $payment->metadata,
+			'metadata' => $payment->getMetadata(),
 		];
 		if (!empty(($this->options['payment_method_types']))) {
 			$options['payment_method_types'] = $this->options['payment_method_types'];
@@ -58,13 +58,13 @@ class Stripe extends Base implements ProviderInterface {
 		\Stripe\Stripe::setApiKey($this->credentials['secret_key']);
 
 		try {
-			$paymentIntent = PaymentIntent::retrieve($payment->providerId);
+			$paymentIntent = PaymentIntent::retrieve($payment->getProviderId());
 		} catch (Throwable $e) {
 			throw new GatewayException($e->getMessage());
 		}
 
-		$payment->status = $this->mapStatus($paymentIntent->status);
-		return $payment->status;
+		$payment->setStatus($this->mapStatus($paymentIntent->status));
+		return $payment->getStatus();
 	}
 
 	/**
@@ -73,7 +73,7 @@ class Stripe extends Base implements ProviderInterface {
 	public function refund(Payment $payment, ?float $amount = null): void {
 		\Stripe\Stripe::setApiKey($this->credentials['secret_key']);
 		$options = [
-			'charge' => $payment->providerId,
+			'charge' => $payment->getProviderId(),
 		];
 		if (!is_null($amount)) {
 			$options['amount'] = $amount * 100;
@@ -112,7 +112,7 @@ class Stripe extends Base implements ProviderInterface {
 			}
 
 			// If the event is not related to a Payment Intent, do nothing
-			return $payment->status;
+			return $payment->getStatus();
 
 		} catch (SignatureVerificationException|\Exception $e) {
 			throw new GatewayException($e->getMessage());

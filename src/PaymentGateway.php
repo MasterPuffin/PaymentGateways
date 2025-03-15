@@ -9,7 +9,7 @@ use Providers\PayPal;
 use Providers\Stripe;
 
 class PaymentGateway {
-	public object $providerClass;
+	private object $providerClass;
 	private Provider $provider;
 
 	/**
@@ -45,7 +45,7 @@ class PaymentGateway {
 	public function create(Payment $payment) {
 		if (empty($this->providerClass->successUrl)) throw new InvalidOptionsException("successUrl is required");
 		if (empty($this->providerClass->cancelUrl)) throw new InvalidOptionsException("cancelUrl is required");
-		$payment->provider = $this->provider;
+		$payment->setProvider($this->provider);
 		return $this->providerClass->create($payment);
 	}
 
@@ -53,7 +53,7 @@ class PaymentGateway {
 	 * @throws InvalidOptionsException
 	 */
 	public function execute(Payment $payment): Status {
-		if (empty($payment->providerId)) throw new InvalidOptionsException("providerId is required");
+		if (empty($payment->getProviderId())) throw new InvalidOptionsException("providerId is required");
 		return $this->providerClass->execute($payment);
 	}
 
@@ -63,7 +63,7 @@ class PaymentGateway {
 	 * @throws GatewayException
 	 */
 	public function refund(Payment $payment, ?float $amount = null): void {
-		if (empty($payment->providerId)) throw new InvalidOptionsException("providerId is required");
+		if (empty($payment->getProviderId())) throw new InvalidOptionsException("providerId is required");
 		$this->providerClass->refund($payment, $amount);
 	}
 
@@ -73,7 +73,7 @@ class PaymentGateway {
 	 * @throws GatewayException
 	 */
 	public function getStatusFromWebhook(Payment $payment, string $payload): Status {
-		if (empty($payment->providerId)) throw new InvalidOptionsException("providerId is required");
+		if (empty($payment->getProviderId())) throw new InvalidOptionsException("providerId is required");
 		return $this->providerClass->getStatusFromWebhook($payment, $payload);
 	}
 
