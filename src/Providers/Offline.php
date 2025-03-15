@@ -24,4 +24,11 @@ class Offline extends Base implements ProviderInterface {
 	public function refund(Payment $payment): void {
 		throw new NotImplementedException("Refund is not implemented");
 	}
+
+	/**
+	 * @throws NotImplementedException
+	 */
+	public function getStatusFromWebhook(Payment $payment, string $payload): Status {
+		throw new NotImplementedException("handleWebhook is not implemented");
+	}
 }
