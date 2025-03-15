@@ -4,7 +4,6 @@ namespace Providers;
 
 use Exceptions\NotImplementedException;
 use Payment;
-use Provider;
 use ProviderInterface;
 use Status;
 
@@ -14,7 +13,7 @@ class Offline extends Base implements ProviderInterface {
 	}
 
 	public function execute(Payment $payment): Status {
-		$payment->status = Status::Pending;
+		$payment->setStatus(Status::Pending);
 		return Status::Pending;
 	}
 
