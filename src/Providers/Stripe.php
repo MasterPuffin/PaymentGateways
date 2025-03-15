@@ -48,6 +48,7 @@ class Stripe extends Base implements ProviderInterface {
 		} catch (Throwable $e) {
 			throw new GatewayException($e->getMessage());
 		}
+		//TODO get payment intent id
 		return $session->url;
 	}
 
