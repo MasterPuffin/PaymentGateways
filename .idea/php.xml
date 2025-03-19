@@ -34,15 +34,10 @@
   </component>
   <component name="PhpIncludePathManager">
     <include_path>
-      <path value="$PROJECT_DIR$/vendor/apimatic/core-interfaces" />
-      <path value="$PROJECT_DIR$/vendor/apimatic/core" />
-      <path value="$PROJECT_DIR$/vendor/paypal/paypal-server-sdk" />
-      <path value="$PROJECT_DIR$/vendor/php-jsonpointer/php-jsonpointer" />
-      <path value="$PROJECT_DIR$/vendor/psr/log" />
       <path value="$PROJECT_DIR$/vendor/composer" />
-      <path value="$PROJECT_DIR$/vendor/apimatic/unirest-php" />
-      <path value="$PROJECT_DIR$/vendor/apimatic/jsonmapper" />
       <path value="$PROJECT_DIR$/vendor/stripe/stripe-php" />
+      <path value="$PROJECT_DIR$/vendor/paypal/paypal-checkout-sdk" />
+      <path value="$PROJECT_DIR$/vendor/paypal/paypalhttp" />
     </include_path>
   </component>
   <component name="PhpInterpreters">
