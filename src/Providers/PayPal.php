@@ -2,6 +2,7 @@
 
 namespace MasterPuffin\PaymentGateways\Providers;
 
+use Exception;
 use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Exceptions\NotImplementedException;
 use MasterPuffin\PaymentGateways\Payment;
@@ -10,9 +11,6 @@ use MasterPuffin\PaymentGateways\Status;
 use PaypalServerSdkLib\Authentication\ClientCredentialsAuthCredentialsBuilder;
 use PaypalServerSdkLib\Environment;
 use PaypalServerSdkLib\Exceptions\ApiException;
-use PaypalServerSdkLib\Logging\LoggingConfigurationBuilder;
-use PaypalServerSdkLib\Logging\RequestLoggingConfigurationBuilder;
-use PaypalServerSdkLib\Logging\ResponseLoggingConfigurationBuilder;
 use PaypalServerSdkLib\Models\Builders\AmountWithBreakdownBuilder;
 use PaypalServerSdkLib\Models\Builders\OrderApplicationContextBuilder;
 use PaypalServerSdkLib\Models\Builders\OrderCaptureRequestBuilder;
@@ -22,7 +20,6 @@ use PaypalServerSdkLib\Models\CheckoutPaymentIntent;
 use PaypalServerSdkLib\Models\OrderApplicationContextUserAction;
 use PaypalServerSdkLib\PaypalServerSdkClient;
 use PaypalServerSdkLib\PaypalServerSdkClientBuilder;
-use Psr\Log\LogLevel;
 use Throwable;
 
 class PayPal extends Base implements ProviderInterface {
@@ -62,7 +59,7 @@ class PayPal extends Base implements ProviderInterface {
 			if (is_array($apiResponse->getResult())) {
 				throw new GatewayException($apiResponse->getResult()['message']);
 			}
-			//TODO get payment intent id
+			$payment->setProviderId($apiResponse->getResult()->id);
 			foreach ($apiResponse->getResult()->getLinks() as $link) {
 				if ($link->getRel() === 'approve') {
 					return $link->getHref();
@@ -112,7 +109,7 @@ class PayPal extends Base implements ProviderInterface {
 				$e->getCode(),
 				$e
 			);
-		} catch (\Exception $e) {
+		} catch (Exception $e) {
 			throw new GatewayException(
 				"Failed to capture order: {$e->getMessage()}",
 				$e->getCode(),
