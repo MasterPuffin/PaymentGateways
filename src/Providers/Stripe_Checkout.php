@@ -13,7 +13,7 @@ use Stripe\Refund;
 use Stripe\Webhook;
 use Throwable;
 
-class Stripe extends Base implements ProviderInterface {
+class Stripe_Checkout extends Base implements ProviderInterface {
 
 	/**
 	 * @throws GatewayException

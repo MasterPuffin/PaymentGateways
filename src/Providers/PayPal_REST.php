@@ -17,8 +17,7 @@ use PayPalCheckoutSdk\Orders\OrdersCreateRequest;
 use PayPalCheckoutSdk\Payments\CapturesRefundRequest;
 use Throwable;
 
-class PayPal extends Base implements ProviderInterface {
-
+class PayPal_REST extends Base implements ProviderInterface {
 	/**
 	 * @throws GatewayException
 	 */
@@ -57,7 +56,8 @@ class PayPal extends Base implements ProviderInterface {
 				'shipping_preference' => 'NO_SHIPPING',
 				'user_action' => 'PAY_NOW',
 				"cancel_url" => $this->cancelUrl,
-				"return_url" => $this->successUrl
+				"return_url" => $this->successUrl,
+				...(array_key_exists('application_context', $this->options) ? $this->options['application_context'] : []),
 			],
 		];
 
@@ -91,7 +91,6 @@ class PayPal extends Base implements ProviderInterface {
 		//TODO get actual status
 		return Status::Succeeded;
 	}
-
 
 
 	/**

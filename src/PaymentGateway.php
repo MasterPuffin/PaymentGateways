@@ -8,8 +8,8 @@ use MasterPuffin\PaymentGateways\Exceptions\InvalidCredentialsException;
 use MasterPuffin\PaymentGateways\Exceptions\InvalidOptionsException;
 use MasterPuffin\PaymentGateways\Exceptions\NotImplementedException;
 use MasterPuffin\PaymentGateways\Providers\Offline;
-use MasterPuffin\PaymentGateways\Providers\PayPal;
-use MasterPuffin\PaymentGateways\Providers\Stripe;
+use MasterPuffin\PaymentGateways\Providers\PayPal_REST;
+use MasterPuffin\PaymentGateways\Providers\Stripe_Checkout;
 
 class PaymentGateway {
 	private object $providerClass;
@@ -17,17 +17,16 @@ class PaymentGateway {
 
 	/**
 	 * @throws InvalidCredentialsException
-	 * @throws InvalidOptionsException
 	 */
 	public function __construct(Provider $provider, array $credentials = [], array $options = []) {
 		switch ($provider) {
-			case Provider::PayPal:
-				$this->providerClass = new PayPal();
+			case Provider::PayPal_REST:
+				$this->providerClass = new PayPal_REST();
 				if (!array_key_exists('client_id', $credentials)) throw new InvalidCredentialsException("client_id is required");
 				if (!array_key_exists('client_secret', $credentials)) throw new InvalidCredentialsException("client_secret is required");
 				break;
-			case Provider::Stripe:
-				$this->providerClass = new Stripe();
+			case Provider::Stripe_Checkout:
+				$this->providerClass = new Stripe_Checkout();
 				if (!array_key_exists('secret_key', $credentials)) throw new InvalidCredentialsException("secret_key is required");
 				if (!array_key_exists('webhook_secret', $credentials)) throw new InvalidCredentialsException("webhook_secret is required");
 				break;
@@ -54,7 +53,7 @@ class PaymentGateway {
 	}
 
 	/**
-	 * @throws InvalidOptionsException
+	 * @throws InvalidOptionsException|GatewayException
 	 */
 	public function execute(Payment $payment): Status {
 		if (empty($payment->getProviderId())) throw new InvalidOptionsException("providerId is required");

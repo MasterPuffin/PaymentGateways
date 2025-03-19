@@ -2,7 +2,7 @@
 
 namespace MasterPuffin\PaymentGateways;
 enum Provider: string {
-	case PayPal = 'paypal';
-	case Stripe = 'stripe';
+	case PayPal_REST = 'paypal_rest';
+	case Stripe_Checkout = 'stripe_checkout';
 	case Offline = 'offline';
 }
