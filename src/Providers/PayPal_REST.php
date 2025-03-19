@@ -66,6 +66,7 @@ class PayPal_REST extends Base implements ProviderInterface {
 			$response = $client->execute($request);
 			foreach ($response->result->links as $link) {
 				if ($link->rel === "approve") {
+					$payment->setProviderId($response->result->id);
 					return $link->href;
 				}
 			}
