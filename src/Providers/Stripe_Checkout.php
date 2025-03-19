@@ -10,6 +10,7 @@ use Stripe\Checkout\Session;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\PaymentIntent;
 use Stripe\Refund;
+use Stripe\Stripe;
 use Stripe\Webhook;
 use Throwable;
 
@@ -19,7 +20,7 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	 * @throws GatewayException
 	 */
 	public function create(Payment $payment): string {
-		\Stripe\Stripe::setApiKey($this->credentials['secret_key']);
+		Stripe::setApiKey($this->credentials['secret_key']);
 
 		$line_items = [[
 			'price_data' => [
@@ -48,6 +49,12 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 		} catch (Throwable $e) {
 			throw new GatewayException($e->getMessage());
 		}
+
+		//dump($session);
+		//$checkoutSession = \Stripe\Checkout\Session::retrieve($session->id);
+		//dump($checkoutSession);
+		//
+		//die;
 		$payment->setProviderId($session->id);
 		return $session->url;
 	}
@@ -56,10 +63,25 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	 * @throws GatewayException
 	 */
 	public function execute(Payment $payment): Status {
-		\Stripe\Stripe::setApiKey($this->credentials['secret_key']);
+		Stripe::setApiKey($this->credentials['secret_key']);
+
+		$pi = $payment->getProviderId();
+		if (str_starts_with($pi, 'cs_')) {
+			//	The payment intent is a checkout session
+			try {
+				$session = Session::retrieve($pi);
+			} catch (Throwable $e) {
+				throw new GatewayException($e->getMessage());
+			}
+			$pi = $session->payment_intent;
+			if (empty($pi)) {
+				throw new GatewayException("Payment intent not found");
+			}
+			$payment->setProviderId($pi);
+		}
 
 		try {
-			$paymentIntent = PaymentIntent::retrieve($payment->getProviderId());
+			$paymentIntent = PaymentIntent::retrieve($pi);
 		} catch (Throwable $e) {
 			throw new GatewayException($e->getMessage());
 		}
@@ -73,7 +95,7 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	 */
 	public function refund(Payment $payment, ?float $amount = null): void {
 		$isFullRefund = is_null($amount);
-		\Stripe\Stripe::setApiKey($this->credentials['secret_key']);
+		Stripe::setApiKey($this->credentials['secret_key']);
 		$options = [
 			'charge' => $payment->getProviderId(),
 		];
@@ -92,7 +114,7 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	 * @throws GatewayException
 	 */
 	public function getStatusFromWebhook(Payment $payment, string $payload = ''): Status {
-		\Stripe\Stripe::setApiKey($this->credentials['secret_key']);
+		Stripe::setApiKey($this->credentials['secret_key']);
 		try {
 			// Verify the webhook signature
 			$event = Webhook::constructEvent(
