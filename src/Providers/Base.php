@@ -5,6 +5,9 @@ namespace MasterPuffin\PaymentGateways\Providers;
 class Base {
 	protected array $credentials;
 	protected array $options;
+	protected string $successUrl = '';
+	protected string $cancelUrl = '';
+	protected bool $sandbox = false;
 
 	public function getSuccessUrl(): string {
 		return $this->successUrl;
@@ -13,9 +16,6 @@ class Base {
 	public function getCancelUrl(): string {
 		return $this->cancelUrl;
 	}
-	protected string $successUrl;
-	protected string $cancelUrl;
-	protected bool $sandbox = false;
 
 	public function setCredentials(array $credentials): void {
 		$this->credentials = $credentials;
