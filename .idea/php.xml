@@ -32,6 +32,19 @@
       <phpcs_by_interpreter asDefaultInterpreter="true" interpreter_id="a13a5dd9-d405-4c2c-8358-865e6d863929" timeout="30000" />
     </phpcs_settings>
   </component>
+  <component name="PhpIncludePathManager">
+    <include_path>
+      <path value="$PROJECT_DIR$/vendor/apimatic/core-interfaces" />
+      <path value="$PROJECT_DIR$/vendor/apimatic/core" />
+      <path value="$PROJECT_DIR$/vendor/paypal/paypal-server-sdk" />
+      <path value="$PROJECT_DIR$/vendor/php-jsonpointer/php-jsonpointer" />
+      <path value="$PROJECT_DIR$/vendor/psr/log" />
+      <path value="$PROJECT_DIR$/vendor/composer" />
+      <path value="$PROJECT_DIR$/vendor/apimatic/unirest-php" />
+      <path value="$PROJECT_DIR$/vendor/apimatic/jsonmapper" />
+      <path value="$PROJECT_DIR$/vendor/stripe/stripe-php" />
+    </include_path>
+  </component>
   <component name="PhpInterpreters">
     <interpreters>
       <interpreter id="a13a5dd9-d405-4c2c-8358-865e6d863929" name="Ubuntu" home="\\wsl$\Ubuntu/usr/bin/php" auto="false" debugger_id="php.debugger.XDebug">

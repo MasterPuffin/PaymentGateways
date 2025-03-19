@@ -48,7 +48,7 @@ class Stripe extends Base implements ProviderInterface {
 		} catch (Throwable $e) {
 			throw new GatewayException($e->getMessage());
 		}
-		//TODO get payment intent id
+		$payment->setProviderId($session->id);
 		return $session->url;
 	}
 
@@ -72,15 +72,17 @@ class Stripe extends Base implements ProviderInterface {
 	 * @throws GatewayException
 	 */
 	public function refund(Payment $payment, ?float $amount = null): void {
+		$isFullRefund = is_null($amount);
 		\Stripe\Stripe::setApiKey($this->credentials['secret_key']);
 		$options = [
 			'charge' => $payment->getProviderId(),
 		];
-		if (!is_null($amount)) {
+		if (!$isFullRefund) {
 			$options['amount'] = $amount * 100;
 		}
 		try {
 			Refund::create($options);
+			$payment->setStatus($isFullRefund ? Status::Refunded : Status::PartiallyRefunded);
 		} catch (Throwable $e) {
 			throw new GatewayException($e->getMessage());
 		}
