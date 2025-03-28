@@ -42,8 +42,7 @@ class PaymentGateway {
 	}
 
 	/**
-	 * @throws InvalidOptionsException
-	 * @throws GatewayException
+	 * @throws InvalidOptionsException|GatewayException
 	 */
 	public function create(Payment $payment) {
 		if (empty($this->providerClass->getSuccessUrl())) throw new InvalidOptionsException("successUrl is required");
@@ -53,30 +52,26 @@ class PaymentGateway {
 	}
 
 	/**
-	 * @throws InvalidOptionsException|GatewayException
+	 * @throws InvalidOptionsException
 	 */
 	public function execute(Payment $payment): Status {
-		if (empty($payment->getProviderId())) throw new InvalidOptionsException("providerId is required");
+		if (empty($payment->getProviderId()) && !$this->providerClass instanceof Offline) throw new InvalidOptionsException("providerId is required");
 		return $this->providerClass->execute($payment);
 	}
 
 	/**
-	 * @throws InvalidOptionsException
-	 * @throws NotImplementedException
-	 * @throws GatewayException
+	 * @throws InvalidOptionsException|GatewayException
 	 */
 	public function refund(Payment $payment, ?float $amount = null): void {
-		if (empty($payment->getProviderId())) throw new InvalidOptionsException("providerId is required");
+		if (empty($payment->getProviderId()) && !$this->providerClass instanceof Offline) throw new InvalidOptionsException("providerId is required");
 		$this->providerClass->refund($payment, $amount);
 	}
 
 	/**
-	 * @throws InvalidOptionsException
-	 * @throws NotImplementedException
-	 * @throws GatewayException
+	 * @throws InvalidOptionsException|GatewayException
 	 */
 	public function getStatusFromWebhook(Payment $payment, string $payload): Status {
-		if (empty($payment->getProviderId())) throw new InvalidOptionsException("providerId is required");
+		if (empty($payment->getProviderId()) && !$this->providerClass instanceof Offline) throw new InvalidOptionsException("providerId is required");
 		return $this->providerClass->getStatusFromWebhook($payment, $payload);
 	}
 
