@@ -3,7 +3,7 @@
 namespace MasterPuffin\PaymentGateways\Providers;
 
 
-use MasterPuffin\PaymentGateways\Exceptions\NotImplementedException;
+use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\ProviderInterface;
 use MasterPuffin\PaymentGateways\Status;
@@ -19,16 +19,16 @@ class Offline extends Base implements ProviderInterface {
 	}
 
 	/**
-	 * @throws NotImplementedException
+	 * @throws GatewayException
 	 */
 	public function refund(Payment $payment): void {
-		throw new NotImplementedException("Refund is not implemented");
+		throw new GatewayException("Refund is not possible with offline provider");
 	}
 
 	/**
-	 * @throws NotImplementedException
+	 * @throws GatewayException
 	 */
 	public function getStatusFromWebhook(Payment $payment, string $payload): Status {
-		throw new NotImplementedException("handleWebhook is not implemented");
+		throw new GatewayException("getStatusFromWebhook is not possible with offline provider");
 	}
 }
