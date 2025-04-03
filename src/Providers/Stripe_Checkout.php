@@ -50,11 +50,6 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 			throw new GatewayException($e->getMessage());
 		}
 
-		//dump($session);
-		//$checkoutSession = \Stripe\Checkout\Session::retrieve($session->id);
-		//dump($checkoutSession);
-		//
-		//die;
 		$payment->setProviderId($session->id);
 		return $session->url;
 	}
@@ -97,7 +92,7 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 		$isFullRefund = is_null($amount);
 		Stripe::setApiKey($this->credentials['secret_key']);
 		$options = [
-			'charge' => $payment->getProviderId(),
+			'payment_intent' => $payment->getProviderId(),
 		];
 		if (!$isFullRefund) {
 			$options['amount'] = $amount * 100;
