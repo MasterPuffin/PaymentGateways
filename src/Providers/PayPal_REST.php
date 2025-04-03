@@ -89,7 +89,10 @@ class PayPal_REST extends Base implements ProviderInterface {
 		} catch (Exception $e) {
 			throw new GatewayException($this->_getErrorMessage($e));
 		}
-		//TODO get actual status
+		if ($response->result->status !== 'COMPLETED') {
+			return Status::Failed;
+		}
+		$payment->setProviderId($response->result->purchase_units[0]->payments->captures[0]->id ?? $response->result->id);
 		return Status::Succeeded;
 	}
 
@@ -100,6 +103,8 @@ class PayPal_REST extends Base implements ProviderInterface {
 	public function refund(Payment $payment, ?float $amount = null): void {
 		$isFullRefund = is_null($amount);
 		$client = $this->_createClient();
+		//dump($payment->getProviderId());
+		//die;
 		$request = new CapturesRefundRequest($payment->getProviderId());
 		$request->body = array(
 			'amount' =>
@@ -114,8 +119,7 @@ class PayPal_REST extends Base implements ProviderInterface {
 		} catch (Exception $e) {
 			throw new GatewayException($this->_getErrorMessage($e));
 		}
-		//TODO get actual status
-		if ($response->statusCode !== 201 || $response->result->status) {
+		if ($response->statusCode !== 201 || $response->result->status !== 'COMPLETED') {
 			throw new GatewayException("Error during refund :" . $response->result->status);
 		}
 	}
