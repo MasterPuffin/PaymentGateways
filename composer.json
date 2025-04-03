@@ -15,6 +15,7 @@
     ],
     "minimum-stability": "stable",
     "require": {
+        "php": ">=8.1",
         "stripe/stripe-php": "^16.6",
         "paypal/paypal-checkout-sdk": "^1.0"
     }
