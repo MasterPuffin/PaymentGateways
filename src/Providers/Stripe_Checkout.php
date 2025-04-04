@@ -7,6 +7,7 @@ use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\ProviderInterface;
 use MasterPuffin\PaymentGateways\Status;
+use Psr\Http\Message\RequestInterface;
 use Stripe\Checkout\Session;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\PaymentIntent;
@@ -109,12 +110,12 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	/**
 	 * @throws GatewayException
 	 */
-	public function getStatusFromWebhook(Payment $payment, string $payload = ''): Status {
+	public function getStatusFromWebhook(Payment $payment, RequestInterface|null $request = null): Status {
 		Stripe::setApiKey($this->credentials['secret_key']);
 		try {
 			// Verify the webhook signature
 			$event = Webhook::constructEvent(
-				$payload,
+				$request->getBody()->getContents(),
 				$_SERVER['HTTP_STRIPE_SIGNATURE'],
 				$this->credentials['webhook_secret']
 			);

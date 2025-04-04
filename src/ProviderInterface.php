@@ -1,6 +1,9 @@
 <?php
 
 namespace MasterPuffin\PaymentGateways;
+
+use Psr\Http\Message\RequestInterface;
+
 interface ProviderInterface {
 	public function create(Payment $payment): ?string;
 
@@ -8,5 +11,5 @@ interface ProviderInterface {
 
 	public function refund(Payment $payment): void;
 
-	public function getStatusFromWebhook(Payment $payment, string $payload): Status;
+	public function getStatusFromWebhook(Payment $payment, ?RequestInterface $request = null): Status;
 }

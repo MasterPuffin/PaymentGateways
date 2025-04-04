@@ -7,6 +7,7 @@ use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\ProviderInterface;
 use MasterPuffin\PaymentGateways\Status;
+use Psr\Http\Message\RequestInterface;
 
 class Offline extends Base implements ProviderInterface {
 	public function create(Payment $payment): string {
@@ -28,7 +29,7 @@ class Offline extends Base implements ProviderInterface {
 	/**
 	 * @throws GatewayException
 	 */
-	public function getStatusFromWebhook(Payment $payment, string $payload): Status {
+	public function getStatusFromWebhook(Payment $payment, RequestInterface|null $request = null): Status {
 		throw new GatewayException("getStatusFromWebhook is not possible with offline provider");
 	}
 }
