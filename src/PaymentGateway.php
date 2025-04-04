@@ -6,10 +6,10 @@ namespace MasterPuffin\PaymentGateways;
 use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Exceptions\InvalidCredentialsException;
 use MasterPuffin\PaymentGateways\Exceptions\InvalidOptionsException;
-use MasterPuffin\PaymentGateways\Exceptions\NotImplementedException;
 use MasterPuffin\PaymentGateways\Providers\Offline;
 use MasterPuffin\PaymentGateways\Providers\PayPal_REST;
 use MasterPuffin\PaymentGateways\Providers\Stripe_Checkout;
+use Psr\Http\Message\RequestInterface;
 
 class PaymentGateway {
 	private object $providerClass;
@@ -71,9 +71,9 @@ class PaymentGateway {
 	/**
 	 * @throws InvalidOptionsException|GatewayException
 	 */
-	public function getStatusFromWebhook(Payment $payment, string $payload): Status {
+	public function getStatusFromWebhook(Payment $payment, RequestInterface  $request): Status {
 		if (empty($payment->getProviderId()) && !$this->providerClass instanceof Offline) throw new InvalidOptionsException("providerId is required");
-		return $this->providerClass->getStatusFromWebhook($payment, $payload);
+		return $this->providerClass->getStatusFromWebhook($payment, $request);
 	}
 
 	public function setSuccessUrl(string $url): void {
