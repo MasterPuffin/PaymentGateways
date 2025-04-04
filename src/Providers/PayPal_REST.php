@@ -130,9 +130,11 @@ class PayPal_REST extends Base implements ProviderInterface {
 		if (!in_array($payload->event_type, [
 			'PAYMENT.CAPTURE.COMPLETED',
 			'PAYMENT.CAPTURE.DENIED',
+			'PAYMENT.CAPTURE.DECLINED',
 			'PAYMENT.CAPTURE.REFUNDED',
 			'PAYMENT.CAPTURE.REVERSED',
 			'CHECKOUT.ORDER.APPROVED',
+			'CHECKOUT.ORDER.DECLINED',
 			'CUSTOMER.DISPUTE.CREATED'
 		])) {
 			// If the event is not related to a Payment Intent, do nothing
