@@ -5,7 +5,6 @@ namespace MasterPuffin\PaymentGateways\Providers;
 
 use Exception;
 use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
-use MasterPuffin\PaymentGateways\Exceptions\NotImplementedException;
 use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\ProviderInterface;
 use MasterPuffin\PaymentGateways\Status;
@@ -14,7 +13,9 @@ use PayPalCheckoutSdk\Core\ProductionEnvironment;
 use PayPalCheckoutSdk\Core\SandboxEnvironment;
 use PayPalCheckoutSdk\Orders\OrdersCaptureRequest;
 use PayPalCheckoutSdk\Orders\OrdersCreateRequest;
+use PayPalCheckoutSdk\Payments\CapturesGetRequest;
 use PayPalCheckoutSdk\Payments\CapturesRefundRequest;
+use Psr\Http\Message\RequestInterface;
 use Throwable;
 
 class PayPal_REST extends Base implements ProviderInterface {
@@ -89,13 +90,11 @@ class PayPal_REST extends Base implements ProviderInterface {
 		} catch (Exception $e) {
 			throw new GatewayException($this->_getErrorMessage($e));
 		}
-		if ($response->result->status !== 'COMPLETED') {
-			return Status::Failed;
-		}
-		$payment->setProviderId($response->result->purchase_units[0]->payments->captures[0]->id ?? $response->result->id);
-		return Status::Succeeded;
-	}
 
+		$payment->setProviderId($response->result->purchase_units[0]->payments->captures[0]->id ?? $response->result->id);
+		$payment->setStatus($this->_mapToStatus($response->result->status));
+		return $payment->getStatus();
+	}
 
 	/**
 	 * @throws GatewayException
@@ -103,8 +102,6 @@ class PayPal_REST extends Base implements ProviderInterface {
 	public function refund(Payment $payment, ?float $amount = null): void {
 		$isFullRefund = is_null($amount);
 		$client = $this->_createClient();
-		//dump($payment->getProviderId());
-		//die;
 		$request = new CapturesRefundRequest($payment->getProviderId());
 		$request->body = array(
 			'amount' =>
@@ -123,6 +120,38 @@ class PayPal_REST extends Base implements ProviderInterface {
 			throw new GatewayException("Error during refund :" . $response->result->status);
 		}
 	}
+
+
+	/**
+	 * @throws GatewayException
+	 */
+	public function getStatusFromWebhook(Payment $payment, RequestInterface|null $request = null): Status {
+		$payload = json_decode($request->getBody()->getContents());
+		if (!in_array($payload->event_type, [
+			'PAYMENT.CAPTURE.COMPLETED',
+			'PAYMENT.CAPTURE.DENIED',
+			'PAYMENT.CAPTURE.REFUNDED',
+			'PAYMENT.CAPTURE.REVERSED',
+			'CHECKOUT.ORDER.APPROVED',
+			'CUSTOMER.DISPUTE.CREATED'
+		])) {
+			// If the event is not related to a Payment Intent, do nothing
+			return $payment->getStatus();
+		}
+		$client = $this->_createClient();
+		try {
+			// Create a request to get the order details
+			$orderRequest = new CapturesGetRequest($payment->getProviderId());
+
+			$response = $client->execute($orderRequest);
+			//TODO there is no way the check if a dispute has been created
+
+			return $this->_mapToStatus($response->result->status);
+		} catch (Throwable $e) {
+			throw new GatewayException($this->_getErrorMessage($e));
+		}
+	}
+
 
 	private function _createClient(): PayPalHttpClient {
 		if ($this->sandbox) {
@@ -143,10 +172,20 @@ class PayPal_REST extends Base implements ProviderInterface {
 		return $msg->details[0]->issue;
 	}
 
-	/**
-	 * @throws NotImplementedException
-	 */
-	public function getStatusFromWebhook(Payment $payment, string $payload): Status {
-		throw new NotImplementedException();
+	private function _mapToStatus(string $status): Status {
+		switch ($status) {
+			case 'COMPLETED':
+				return Status::Succeeded;
+			case 'PENDING':
+				return Status::Pending;
+			default:
+			case 'DECLINED':
+			case 'FAILED':
+				return Status::Failed;
+			case 'PARTIALLY_REFUNDED':
+				return Status::PartiallyRefunded;
+			case 'REFUNDED':
+				return Status::Refunded;
+		}
 	}
 }
