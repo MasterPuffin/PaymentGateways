@@ -8,4 +8,5 @@ enum Status: string {
 	case Failed = 'failed';
 	case PartiallyRefunded = 'partially_refunded';
 	case Refunded = 'refunded';
+	case Disputed = 'disputed';
 }

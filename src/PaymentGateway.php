@@ -29,6 +29,7 @@ class PaymentGateway {
 				$this->providerClass = new Stripe_Checkout();
 				if (!array_key_exists('secret_key', $credentials)) throw new InvalidCredentialsException("secret_key is required");
 				if (!array_key_exists('webhook_secret', $credentials)) throw new InvalidCredentialsException("webhook_secret is required");
+				if (!is_string($credentials['webhook_secret'])) throw new InvalidCredentialsException("webhook_secret must be a string");
 				break;
 			case Provider::Offline:
 				$this->providerClass = new Offline();
