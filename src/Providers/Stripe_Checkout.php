@@ -2,6 +2,7 @@
 
 namespace MasterPuffin\PaymentGateways\Providers;
 
+use Exception;
 use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\ProviderInterface;
@@ -131,10 +132,21 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 				return $this->mapStatus(str_replace('payment_intent.', '', $status));
 			}
 
+			if ($event->type === 'charge.dispute.created') {
+				return Status::Disputed;
+			}
+
+			if ($event->type === 'refund.created') {
+				if ($event->data->amount === (int)$payment->getAmount() * 100) {
+					return Status::Refunded;
+				}
+				return Status::PartiallyRefunded;
+			}
+
 			// If the event is not related to a Payment Intent, do nothing
 			return $payment->getStatus();
 
-		} catch (SignatureVerificationException|\Exception $e) {
+		} catch (SignatureVerificationException|Exception $e) {
 			throw new GatewayException($e->getMessage());
 		}
 	}
@@ -154,5 +166,4 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 				return Status::Failed;
 		}
 	}
-
 }
