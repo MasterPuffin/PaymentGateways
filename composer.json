@@ -2,6 +2,7 @@
     "name": "masterpuffin/payment-gateways",
     "type": "library",
     "license": "MIT",
+    "version": "1.0.0",
     "autoload": {
         "psr-4": {
             "MasterPuffin\\PaymentGateways\\": "src/"
