@@ -61,6 +61,14 @@ class PaymentGateway {
 	}
 
 	/**
+	 * @throws InvalidOptionsException
+	 */
+	public function cancel(Payment $payment): void {
+		if (empty($payment->getProviderId()) && !$this->providerClass instanceof Offline) throw new InvalidOptionsException("providerId is required");
+		$this->providerClass->cancel($payment);
+	}
+
+	/**
 	 * @throws InvalidOptionsException|GatewayException
 	 */
 	public function refund(Payment $payment, ?float $amount = null): void {

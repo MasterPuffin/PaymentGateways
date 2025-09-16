@@ -19,6 +19,10 @@ class Offline extends Base implements ProviderInterface {
 		return Status::Pending;
 	}
 
+	public function cancel(Payment $payment): void {
+		$payment->setStatus(Status::Cancelled);
+	}
+
 	/**
 	 * @throws GatewayException
 	 */

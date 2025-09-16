@@ -9,6 +9,8 @@ interface ProviderInterface {
 
 	public function execute(Payment $payment): Status;
 
+	public function cancel(Payment $payment): void;
+
 	public function refund(Payment $payment): void;
 
 	public function getStatusFromWebhook(Payment $payment, ?RequestInterface $request = null): Status;
