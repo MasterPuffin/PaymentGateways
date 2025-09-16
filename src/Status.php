@@ -9,4 +9,6 @@ enum Status: string {
 	case PartiallyRefunded = 'partially_refunded';
 	case Refunded = 'refunded';
 	case Disputed = 'disputed';
+	case Authorized = 'authorized';
+	case Cancelled = 'cancelled';
 }

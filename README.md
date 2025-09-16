@@ -55,6 +55,11 @@ $result = $gateway->execute($payment);
 ```
 You can now use the result (which can be different eg. succeeded, pending or failed).
 
+**Important!**
+Some Stripe Payment methods don't allow asynchronous capture (eg. SEPA debit). This library tries to use asynchronous capture, whenever possible. Where not possible, that payment will be created and captured on `create`. The best way to handle this, is either avoiding payment methods which can't be captured asynchronously or to call `$paymentGateway->cancel($payment)` which cancels the payment. This however only works, if the payment state is pending.  
+See the [Stripe Docs](https://docs.stripe.com/payments/payment-methods/payment-method-support) for more info.
+
+
 ## Should I use this?
 If you just want to integrate payments, then yes. If you need any more functionality, like subscriptions or more gateways I would suggest taking a look at [Payum](https://github.com/Payum/Payum).
 
