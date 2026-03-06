@@ -114,6 +114,7 @@ class PayPal_REST extends Base implements ProviderInterface {
 			throw new GatewayException("No capture ID returned from PayPal");
 		}
 
+		$payment->setAmount($captureResponse->result->amount->value);
 		$payment->setProviderId($captureId);
 		$payment->setStatus($status);
 

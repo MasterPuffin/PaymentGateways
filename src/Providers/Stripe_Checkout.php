@@ -82,6 +82,7 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 			}
 		}
 
+		$payment->setAmount($paymentIntent->amount / 100);
 		$payment->setStatus($this->_mapStatus($paymentIntent->status));
 		return $payment->getStatus();
 	}

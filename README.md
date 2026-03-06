@@ -53,7 +53,7 @@ After the user has been redirected back to your site, execute/capture and verify
 $gateway = new PaymentGateway(Provider::Stripe, ['secret_key' => 'abc'], ['payment_method_types' => ['card']]);
 $result = $gateway->execute($payment);
 ```
-You can now use the result (which can be different eg. succeeded, pending or failed).
+You can now use the result (which can be different eg. succeeded, pending or failed). It is best practice to check if the cart has been modified during the checkout process, by comparing $payment->getAmount() with the amount of the cart.
 
 **Important!**
 Some Stripe Payment methods don't allow asynchronous capture (eg. SEPA debit). This library tries to use asynchronous capture, whenever possible. Where not possible, that payment will be created and captured on `create`. The best way to handle this, is either avoiding payment methods which can't be captured asynchronously or to call `$paymentGateway->cancel($payment)` which cancels the payment. This however only works, if the payment state is pending.  
