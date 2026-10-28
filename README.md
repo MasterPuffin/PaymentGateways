@@ -59,13 +59,23 @@ You can now use the result (which can be different eg. succeeded, pending or fai
 Some Stripe Payment methods don't allow asynchronous capture (eg. SEPA debit). This library tries to use asynchronous capture, whenever possible. Where not possible, that payment will be created and captured on `create`. The best way to handle this, is either avoiding payment methods which can't be captured asynchronously or to call `$paymentGateway->cancel($payment)` which cancels the payment. This however only works, if the payment state is pending.  
 See the [Stripe Docs](https://docs.stripe.com/payments/payment-methods/payment-method-support) for more info.
 
+### Webhooks
+Look up the saved payment with the id from the webhook, then let the library verify the event and return the status.
+```
+$gateway = new PaymentGateway(Provider::Stripe_Checkout, ['secret_key' => 'abc', 'webhook_secret' => 'whsec_abc']);
+$providerId = $gateway->getProviderIdFromWebhook($request); // PSR-7 request, not verified yet
+//TODO load the payment saved with $providerId
+$status = $gateway->getStatusFromWebhook($payment, $request);
+```
+Stripe events are verified with the webhook secret. PayPal events are not signed reliably, so the library fetches the status of the capture from the PayPal API instead of trusting the payload.
+
 
 ## Should I use this?
 If you just want to integrate payments, then yes. If you need any more functionality, like subscriptions or more gateways I would suggest taking a look at [Payum](https://github.com/Payum/Payum).
 
 ## Known issues
-### The library uses the outdated PayPal
-This is correct, however the new [Server SDK](https://github.com/paypal/PayPal-PHP-Server-SDK) is still in beta and does not support all required methods.
+### PayPal disputes need a direct API call
+The PayPal [Server SDK](https://github.com/paypal/PayPal-PHP-Server-SDK) has no disputes API, so the dispute check calls it directly with the SDK's OAuth token (requires `ext-curl`).
 
-### Disputes via PayPal webhooks are not supported
-This library won't act on disputes via webhooks from PayPal. The issue is that incoming PayPal webhooks can't be securely verified without preventing MITM attacks. To mitigate this, the library will request the payment from PayPal on an incoming webhook request. The payment object however does not contains if the payment is disputed. A possible workaround would be to request the disputes via the dispute API and check if there is a match. This is however not implemented yet.
+### Disputes via PayPal webhooks
+Incoming PayPal webhooks can't be securely verified without preventing MITM attacks, so the payload is never trusted. For dispute events the library requests the dispute from the dispute API and only reports `Disputed` if it is unresolved and belongs to the payment's capture. Resolved disputes return the status of the capture.

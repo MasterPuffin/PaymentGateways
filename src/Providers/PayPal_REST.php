@@ -2,75 +2,82 @@
 
 namespace MasterPuffin\PaymentGateways\Providers;
 
-use Exception;
 use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\ProviderInterface;
 use MasterPuffin\PaymentGateways\Status;
-use PayPalCheckoutSdk\Core\PayPalHttpClient;
-use PayPalCheckoutSdk\Core\ProductionEnvironment;
-use PayPalCheckoutSdk\Core\SandboxEnvironment;
-use PayPalCheckoutSdk\Orders\OrdersCreateRequest;
-use PayPalCheckoutSdk\Orders\OrdersAuthorizeRequest;
-use PayPalCheckoutSdk\Payments\AuthorizationsCaptureRequest;
-use PayPalCheckoutSdk\Payments\AuthorizationsVoidRequest;
-use PayPalCheckoutSdk\Payments\CapturesGetRequest;
-use PayPalCheckoutSdk\Payments\CapturesRefundRequest;
+use PaypalServerSdkLib\Authentication\ClientCredentialsAuthCredentialsBuilder;
+use PaypalServerSdkLib\Environment;
+use PaypalServerSdkLib\Exceptions\ErrorException;
+use PaypalServerSdkLib\Http\ApiResponse;
+use PaypalServerSdkLib\Models\Builders\AmountBreakdownBuilder;
+use PaypalServerSdkLib\Models\Builders\AmountWithBreakdownBuilder;
+use PaypalServerSdkLib\Models\Builders\MoneyBuilder;
+use PaypalServerSdkLib\Models\Builders\OrderRequestBuilder;
+use PaypalServerSdkLib\Models\Builders\PaymentSourceBuilder;
+use PaypalServerSdkLib\Models\Builders\PaypalWalletBuilder;
+use PaypalServerSdkLib\Models\Builders\PaypalWalletExperienceContextBuilder;
+use PaypalServerSdkLib\Models\Builders\PurchaseUnitRequestBuilder;
+use PaypalServerSdkLib\Models\Builders\RefundRequestBuilder;
+use PaypalServerSdkLib\Models\CheckoutPaymentIntent;
+use PaypalServerSdkLib\Models\PaypalExperienceLandingPage;
+use PaypalServerSdkLib\Models\PaypalExperienceUserAction;
+use PaypalServerSdkLib\Models\PaypalWalletContextShippingPreference;
+use PaypalServerSdkLib\PaypalServerSdkClient;
+use PaypalServerSdkLib\PaypalServerSdkClientBuilder;
 use Psr\Http\Message\RequestInterface;
 use Throwable;
 
 class PayPal_REST extends Base implements ProviderInterface {
 	/**
+	 * Creates an order with intent AUTHORIZE, {@see execute()} authorizes and captures it after the buyer approved.
+	 * The option `application_context` may set `brand_name` and `locale` of the PayPal checkout page.
+	 *
 	 * @throws GatewayException
 	 */
 	public function create(Payment $payment): ?string {
-		$client = $this->_createClient();
-		$request = new OrdersCreateRequest();
-		$request->prefer('return=representation');
+		$amount = $this->_formatAmount($payment->getAmount());
+		$currency = $payment->getCurrencyCode();
+		$context = $this->options['application_context'] ?? [];
 
-		$shipping = $payer = [
-			'email_address' => $payment->getCustomer()->getEmail(),
-		];
+		$experienceContext = PaypalWalletExperienceContextBuilder::init()
+			->landingPage(PaypalExperienceLandingPage::GUEST_CHECKOUT)
+			->shippingPreference(PaypalWalletContextShippingPreference::NO_SHIPPING)
+			->userAction(PaypalExperienceUserAction::PAY_NOW)
+			->returnUrl($this->successUrl)
+			->cancelUrl($this->cancelUrl)
+			->brandName($context['brand_name'] ?? null)
+			->locale($context['locale'] ?? null)
+			->build();
 
-		$request->body = [
-			'intent' => 'AUTHORIZE',   // 👈 switched to AUTHORIZE
-			'payer' => $payer,
-			'purchase_units' => [[
-				'description' => $payment->getDescription(),
-				'amount' => [
-					'currency_code' => $payment->getCurrencyCode(),
-					'value' => $payment->getAmount(),
-					'breakdown' => [
-						'item_total' => [
-							'currency_code' => $payment->getCurrencyCode(),
-							'value' => $payment->getAmount(),
-						],
-					],
-				],
-				'shipping' => $shipping,
-			]],
-			'application_context' => [
-				'landing_page' => 'BILLING',
-				'shipping_preference' => 'NO_SHIPPING',
-				'user_action' => 'PAY_NOW',
-				'cancel_url' => $this->cancelUrl,
-				'return_url' => $this->successUrl,
-				...(array_key_exists('application_context', $this->options) ? $this->options['application_context'] : []),
-			],
-		];
+		$order = OrderRequestBuilder::init(CheckoutPaymentIntent::AUTHORIZE, [
+			PurchaseUnitRequestBuilder::init(
+				AmountWithBreakdownBuilder::init($currency, $amount)
+					->breakdown(AmountBreakdownBuilder::init()->itemTotal(MoneyBuilder::init($currency, $amount)->build())->build())
+					->build()
+			)->description($payment->getDescription())->build(),
+		])->paymentSource(
+			PaymentSourceBuilder::init()->paypal(
+				PaypalWalletBuilder::init()
+					->emailAddress($payment->getCustomer()->getEmail())
+					->experienceContext($experienceContext)
+					->build()
+			)->build()
+		)->build();
 
-		try {
-			$response = $client->execute($request);
-			foreach ($response->result->links as $link) {
-				if ($link->rel === 'approve') {
-					$payment->setProviderId($response->result->id);
-					return $link->href;
-				}
+		$result = $this->_call(fn(PaypalServerSdkClient $client) => $client->getOrdersController()->createOrder([
+			'body' => $order,
+			'prefer' => 'return=representation',
+		]));
+
+		//With a payment source the buyer is sent to "payer-action", older orders used "approve"
+		foreach ($result->getLinks() ?? [] as $link) {
+			if (in_array($link->getRel(), ['payer-action', 'approve'], true)) {
+				$payment->setProviderId($result->getId());
+				return $link->getHref();
 			}
-			throw new GatewayException('No approve link found');
-		} catch (Throwable $e) {
-			throw new GatewayException($this->_getErrorMessage($e));
 		}
+		throw new GatewayException('No approve link found');
 	}
 
 	/**
@@ -78,45 +85,29 @@ class PayPal_REST extends Base implements ProviderInterface {
 	 * @throws GatewayException
 	 */
 	public function execute(Payment $payment): Status {
-		$client = $this->_createClient();
+		$authorization = $this->_call(fn(PaypalServerSdkClient $client) => $client->getOrdersController()->authorizeOrder([
+			'id' => $payment->getProviderId(),
+			'prefer' => 'return=representation',
+		]));
 
-		// Step 1: authorize the order
-		$authRequest = new OrdersAuthorizeRequest($payment->getProviderId());
-		$authRequest->prefer('return=representation');
-
-		try {
-			$authResponse = $client->execute($authRequest);
-		} catch (Exception $e) {
-			throw new GatewayException($this->_getErrorMessage($e));
-		}
-
-		$authId = $authResponse->result
-			->purchase_units[0]->payments->authorizations[0]->id ?? null;
-
+		$authorizations = ($authorization->getPurchaseUnits()[0] ?? null)?->getPayments()?->getAuthorizations() ?? [];
+		$authId = ($authorizations[0] ?? null)?->getId();
 		if (!$authId) {
 			throw new GatewayException("No authorization ID returned from PayPal");
 		}
 
-		// Step 2: capture the authorization
-		$captureRequest = new AuthorizationsCaptureRequest($authId);
-		$captureRequest->prefer('return=representation');
+		$capture = $this->_call(fn(PaypalServerSdkClient $client) => $client->getPaymentsController()->captureAuthorizedPayment([
+			'authorizationId' => $authId,
+			'prefer' => 'return=representation',
+		]));
 
-		try {
-			$captureResponse = $client->execute($captureRequest);
-		} catch (Exception $e) {
-			throw new GatewayException($this->_getErrorMessage($e));
-		}
-
-		$captureId = $captureResponse->result->id ?? null;
-		$status = $this->_mapToStatus($captureResponse->result->status);
-
-		if (!$captureId) {
+		if (!$capture->getId()) {
 			throw new GatewayException("No capture ID returned from PayPal");
 		}
 
-		$payment->setAmount($captureResponse->result->amount->value);
-		$payment->setProviderId($captureId);
-		$payment->setStatus($status);
+		$payment->setAmount((float)$capture->getAmount()?->getValue());
+		$payment->setProviderId($capture->getId());
+		$payment->setStatus($this->_mapToStatus((string)$capture->getStatus()));
 
 		return $payment->getStatus();
 	}
@@ -126,19 +117,10 @@ class PayPal_REST extends Base implements ProviderInterface {
 	 * @throws GatewayException
 	 */
 	public function cancel(Payment $payment): void {
-		$client = $this->_createClient();
-		$request = new AuthorizationsVoidRequest($payment->getProviderId());
-
-		try {
-			$response = $client->execute($request);
-			if ($response->statusCode === 204) {
-				$payment->setStatus(Status::Cancelled);
-			} else {
-				throw new GatewayException('Cancel failed with status: ' . $response->statusCode);
-			}
-		} catch (Throwable $e) {
-			throw new GatewayException($this->_getErrorMessage($e));
-		}
+		$this->_call(fn(PaypalServerSdkClient $client) => $client->getPaymentsController()->voidPayment([
+			'authorizationId' => $payment->getProviderId(),
+		]));
+		$payment->setStatus(Status::Cancelled);
 	}
 
 	/**
@@ -146,78 +128,178 @@ class PayPal_REST extends Base implements ProviderInterface {
 	 * @throws GatewayException
 	 */
 	public function refund(Payment $payment, ?float $amount = null): void {
-		$isFullRefund = is_null($amount);
-		$client = $this->_createClient();
-		$request = new CapturesRefundRequest($payment->getProviderId());
-		$request->body = [
-			'amount' => [
-				'value' => $isFullRefund ? $payment->getAmount() : $amount,
-				'currency_code' => $payment->getCurrencyCode(),
-			],
-		];
+		$isFullRefund = $this->_isFullRefund($payment, $amount);
 
+		$refund = $this->_call(fn(PaypalServerSdkClient $client) => $client->getPaymentsController()->refundCapturedPayment([
+			'captureId' => $payment->getProviderId(),
+			'prefer' => 'return=representation',
+			'body' => RefundRequestBuilder::init()
+				->amount(MoneyBuilder::init($payment->getCurrencyCode(), $this->_formatAmount($amount ?? $payment->getAmount()))->build())
+				->build(),
+		]));
+
+		//PENDING refunds (e.g. eCheck) are accepted by PayPal and complete later, treating them as failed invites a second refund
+		if (!in_array($refund->getStatus(), ['COMPLETED', 'PENDING'], true)) {
+			throw new GatewayException('Error during refund: ' . $refund->getStatus());
+		}
+
+		//Earlier partial refunds count too, the capture knows whether everything has been refunded by now
 		try {
-			$response = $client->execute($request);
-		} catch (Exception $e) {
-			throw new GatewayException($this->_getErrorMessage($e));
+			$captureStatus = $this->_mapToStatus((string)$this->_getCapture($payment->getProviderId())->getStatus());
+			if (in_array($captureStatus, [Status::Refunded, Status::PartiallyRefunded], true)) {
+				$isFullRefund = $captureStatus === Status::Refunded;
+			}
+		} catch (Throwable) {
 		}
-		if ($response->statusCode !== 201 || $response->result->status !== 'COMPLETED') {
-			throw new GatewayException('Error during refund: ' . $response->result->status);
+		$payment->setStatus($isFullRefund ? Status::Refunded : Status::PartiallyRefunded);
+	}
+
+	/**
+	 * The webhook payload is not trusted (its signature is not checked): the status is always fetched from the PayPal
+	 * API for the saved capture, a dispute is only reported if the API confirms an open dispute for this capture.
+	 *
+	 * @throws GatewayException
+	 */
+	public function getStatusFromWebhook(Payment $payment, RequestInterface|null $request = null): Status {
+		$payload = json_decode($this->_getWebhookBody($request));
+		$eventType = $payload->event_type ?? null;
+		if (!in_array($eventType, [
+			'PAYMENT.AUTHORIZATION.CREATED',
+			'PAYMENT.AUTHORIZATION.VOIDED',
+			'PAYMENT.CAPTURE.COMPLETED',
+			'PAYMENT.CAPTURE.PENDING',
+			'PAYMENT.CAPTURE.DENIED',
+			'PAYMENT.CAPTURE.REFUNDED',
+			'PAYMENT.CAPTURE.REVERSED',
+			'CUSTOMER.DISPUTE.CREATED',
+			'CUSTOMER.DISPUTE.UPDATED',
+			'CUSTOMER.DISPUTE.RESOLVED',
+		], true)) {
+			return $payment->getStatus();
 		}
 
-		$payment->setStatus($isFullRefund ? Status::Refunded : Status::PartiallyRefunded);
+		if (str_starts_with($eventType, 'CUSTOMER.DISPUTE.') && $this->_hasOpenDispute($payload->resource->dispute_id ?? $payload->resource->id ?? null, $payment->getProviderId())) {
+			return Status::Disputed;
+		}
+
+		//Resolved disputes and all other events: the capture shows the outcome (e.g. refunded after a lost dispute)
+		return $this->_mapToStatus((string)$this->_getCapture($payment->getProviderId())->getStatus());
+	}
+
+	/**
+	 * Capture id the event refers to. Capture events carry the capture itself, refunds and reversals link to it ("up"),
+	 * disputes list it as seller transaction.
+	 */
+	public function getProviderIdFromWebhook(RequestInterface $request): ?string {
+		$resource = json_decode((string)$request->getBody())->resource ?? null;
+		if (!is_object($resource)) {
+			return null;
+		}
+
+		foreach ($resource->links ?? [] as $link) {
+			if (($link->rel ?? null) === 'up' && preg_match('#/v2/payments/captures/([^/?]+)#', $link->href ?? '', $match)) {
+				return $match[1];
+			}
+		}
+
+		$disputedTransaction = $resource->disputed_transactions[0]->seller_transaction_id ?? null;
+		if (is_string($disputedTransaction)) {
+			return $disputedTransaction;
+		}
+
+		return is_string($resource->id ?? null) ? $resource->id : null;
 	}
 
 	/**
 	 * @throws GatewayException
 	 */
-	public function getStatusFromWebhook(Payment $payment, RequestInterface|null $request = null): Status {
-		$payload = json_decode($request->getBody()->getContents());
-		if (!in_array($payload->event_type, [
-			'PAYMENT.AUTHORIZATION.CREATED',
-			'PAYMENT.AUTHORIZATION.VOIDED',
-			'PAYMENT.CAPTURE.COMPLETED',
-			'PAYMENT.CAPTURE.DENIED',
-			'PAYMENT.CAPTURE.REFUNDED',
-			'PAYMENT.CAPTURE.REVERSED',
-			'CUSTOMER.DISPUTE.CREATED',
-		])) {
-			return $payment->getStatus();
-		}
+	private function _getCapture(string $captureId): object {
+		return $this->_call(fn(PaypalServerSdkClient $client) => $client->getPaymentsController()->getCapturedPayment([
+			'captureId' => $captureId,
+		]));
+	}
 
+	/**
+	 * Whether PayPal knows an unresolved dispute with this id for the given capture. The SDK has no disputes API,
+	 * so the request uses the SDK's OAuth token directly.
+	 *
+	 * @throws GatewayException
+	 */
+	private function _hasOpenDispute(?string $disputeId, string $captureId): bool {
+		if (empty($disputeId)) {
+			return false;
+		}
 		$client = $this->_createClient();
 		try {
-			$orderRequest = new CapturesGetRequest($payment->getProviderId());
-			$response = $client->execute($orderRequest);
-			return $this->_mapToStatus($response->result->status);
+			$token = $client->getClientCredentialsAuth()->fetchToken()->getAccessToken();
 		} catch (Throwable $e) {
 			throw new GatewayException($this->_getErrorMessage($e));
 		}
-	}
 
-	private function _createClient(): PayPalHttpClient {
-		if ($this->sandbox) {
-			$env = new SandboxEnvironment(
-				$this->credentials['client_id'],
-				$this->credentials['client_secret']
-			);
-		} else {
-			$env = new ProductionEnvironment(
-				$this->credentials['client_id'],
-				$this->credentials['client_secret']
-			);
+		$curl = curl_init($client->getBaseUri() . '/v1/customer/disputes/' . rawurlencode($disputeId));
+		curl_setopt_array($curl, [
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_TIMEOUT => 30,
+			CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $token, 'Content-Type: application/json'],
+		]);
+		$body = curl_exec($curl);
+		$code = curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+		$dispute = is_string($body) ? json_decode($body) : null;
+		if ($code !== 200 || !is_object($dispute)) {
+			throw new GatewayException($dispute->name ?? ('Dispute request failed with status ' . $code));
 		}
-		return new PayPalHttpClient($env);
+
+		if (($dispute->status ?? 'RESOLVED') === 'RESOLVED') {
+			return false;
+		}
+		foreach ($dispute->disputed_transactions ?? [] as $transaction) {
+			if (($transaction->seller_transaction_id ?? null) === $captureId) {
+				return true;
+			}
+		}
+		return false;
 	}
 
-	private function _getErrorMessage(Exception $e): string {
-		$msgObjStr = $e->getMessage();
-		$msg = json_decode($msgObjStr);
+	/**
+	 * Runs an SDK call and returns its result. The SDK throws for most errors and returns an error response for others.
+	 *
+	 * @param callable(PaypalServerSdkClient): ApiResponse $call
+	 * @throws GatewayException
+	 */
+	private function _call(callable $call): mixed {
+		try {
+			$response = $call($this->_createClient());
+		} catch (Throwable $e) {
+			throw new GatewayException($this->_getErrorMessage($e));
+		}
+		if ($response->isError()) {
+			//Error responses aren't mapped to a model, the reason (e.g. CAPTURE_FULLY_REFUNDED) is in the raw body
+			$body = $response->getBody();
+			$error = is_string($body) ? json_decode($body) : (is_object($body) ? $body : null);
+			throw new GatewayException($error->details[0]->issue ?? $error->name ?? $error->message ?? ('PayPal request failed with status ' . $response->getStatusCode()));
+		}
+		return $response->getResult();
+	}
+
+	private function _createClient(): PaypalServerSdkClient {
+		return PaypalServerSdkClientBuilder::init()
+			->clientCredentialsAuthCredentials(ClientCredentialsAuthCredentialsBuilder::init(
+				$this->credentials['client_id'],
+				$this->credentials['client_secret']
+			))
+			->environment($this->sandbox ? Environment::SANDBOX : Environment::PRODUCTION)
+			->timeout(30)
+			->build();
+	}
+
+	private function _getErrorMessage(Throwable $e): string {
+		//API errors carry the reason in their details, e.g. INVALID_RESOURCE_ID
+		if ($e instanceof ErrorException) {
+			return ($e->getDetails()[0] ?? null)?->getIssue() ?? $e->getMessageProperty();
+		}
+		$msg = json_decode($e->getMessage());
 		if ($msg && property_exists($msg, 'error_description')) {
 			return $msg->error_description;
-		}
-		if ($msg && isset($msg->details[0]->issue)) {
-			return $msg->details[0]->issue;
 		}
 		return $e->getMessage();
 	}
