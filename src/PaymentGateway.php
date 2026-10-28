@@ -84,6 +84,14 @@ class PaymentGateway {
 		return $this->providerClass->getStatusFromWebhook($payment, $request);
 	}
 
+	/**
+	 * Id to look up the saved payment for an incoming webhook. Not verified, pass the payment to
+	 * {@see getStatusFromWebhook()} afterwards. Returns null if the webhook doesn't refer to a payment.
+	 */
+	public function getProviderIdFromWebhook(RequestInterface $request): ?string {
+		return $this->providerClass->getProviderIdFromWebhook($request);
+	}
+
 	public function setSuccessUrl(string $url): void {
 		$this->providerClass->setSuccessUrl($url);
 	}

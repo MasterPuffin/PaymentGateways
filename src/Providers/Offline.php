@@ -26,7 +26,7 @@ class Offline extends Base implements ProviderInterface {
 	/**
 	 * @throws GatewayException
 	 */
-	public function refund(Payment $payment): void {
+	public function refund(Payment $payment, ?float $amount = null): void {
 		throw new GatewayException("Refund is not possible with offline provider");
 	}
 
@@ -35,5 +35,9 @@ class Offline extends Base implements ProviderInterface {
 	 */
 	public function getStatusFromWebhook(Payment $payment, RequestInterface|null $request = null): Status {
 		throw new GatewayException("getStatusFromWebhook is not possible with offline provider");
+	}
+
+	public function getProviderIdFromWebhook(RequestInterface $request): ?string {
+		return null;
 	}
 }

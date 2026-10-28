@@ -8,6 +8,7 @@ use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\ProviderInterface;
 use MasterPuffin\PaymentGateways\Status;
 use Psr\Http\Message\RequestInterface;
+use Stripe\Charge;
 use Stripe\Checkout\Session;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\PaymentIntent;
@@ -30,7 +31,7 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 				'product_data' => [
 					'name' => $payment->getDescription(),
 				],
-				'unit_amount' => (int)($payment->getAmount() * 100),
+				'unit_amount' => $this->_toMinorUnits($payment->getAmount()),
 			],
 			'quantity' => 1
 		]];
@@ -46,8 +47,9 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 				'metadata' => $payment->getMetadata(),
 			]
 		];
+		//Called allowed_payment_method_types since API version 2026-09-30.endive (stripe-php 22)
 		if (!empty(($this->options['payment_method_types']))) {
-			$options['payment_method_types'] = $this->options['payment_method_types'];
+			$options['allowed_payment_method_types'] = $this->options['payment_method_types'];
 		}
 
 		try {
@@ -114,31 +116,38 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	 * @throws GatewayException
 	 */
 	public function refund(Payment $payment, ?float $amount = null): void {
-		$isFullRefund = is_null($amount);
+		$isFullRefund = $this->_isFullRefund($payment, $amount);
 		Stripe::setApiKey($this->credentials['secret_key']);
 		$options = [
 			'payment_intent' => $payment->getProviderId(),
 		];
-		if (!$isFullRefund) {
-			$options['amount'] = (int)($amount * 100);
+		if (!is_null($amount)) {
+			$options['amount'] = $this->_toMinorUnits($amount);
 		}
 		try {
-			Refund::create($options);
-			$payment->setStatus($isFullRefund ? Status::Refunded : Status::PartiallyRefunded);
+			$refund = Refund::create($options);
 		} catch (Throwable $e) {
 			throw new GatewayException($e->getMessage());
 		}
+
+		//Earlier partial refunds count too, the charge knows whether everything has been refunded by now
+		try {
+			$isFullRefund = Charge::retrieve($refund->charge)->refunded;
+		} catch (Throwable) {
+		}
+		$payment->setStatus($isFullRefund ? Status::Refunded : Status::PartiallyRefunded);
 	}
 
 	/**
 	 * @throws GatewayException
 	 */
 	public function getStatusFromWebhook(Payment $payment, RequestInterface|null $request = null): Status {
+		$body = $this->_getWebhookBody($request);
 		Stripe::setApiKey($this->credentials['secret_key']);
 		try {
 			$event = Webhook::constructEvent(
-				$request->getBody()->getContents(),
-				$_SERVER['HTTP_STRIPE_SIGNATURE'],
+				$body,
+				$request->getHeaderLine('Stripe-Signature'),
 				$this->credentials['webhook_secret']
 			);
 
@@ -157,17 +166,25 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 				return Status::Disputed;
 			}
 
-			if ($event->type === 'refund.created') {
-				if ($event->data->amount === (int)$payment->getAmount() * 100) {
-					return Status::Refunded;
-				}
-				return Status::PartiallyRefunded;
+			//The charge carries the sum of all refunds, a single refund.created event only its own amount
+			if ($event->type === 'charge.refunded') {
+				$charge = $event->data->object;
+				return $charge->refunded ? Status::Refunded : Status::PartiallyRefunded;
 			}
 
 			return $payment->getStatus();
 		} catch (SignatureVerificationException|Exception $e) {
 			throw new GatewayException($e->getMessage());
 		}
+	}
+
+	/**
+	 * Payment intent the event refers to: charges, refunds and disputes reference it, payment intent events are it.
+	 */
+	public function getProviderIdFromWebhook(RequestInterface $request): ?string {
+		$object = json_decode((string)$request->getBody())->data->object ?? null;
+		$id = $object->payment_intent ?? $object->id ?? null;
+		return is_string($id) ? $id : null;
 	}
 
 	private function _mapStatus(string $status): Status {
@@ -209,6 +226,10 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 			'revolut_pay',
 			'vipps',
 		];
+		//Without explicit methods Stripe may offer methods that can't be captured manually
+		if (empty($this->options['payment_method_types'])) {
+			return false;
+		}
 		foreach ($this->options['payment_method_types'] as $method) {
 			if (!in_array($method, $supported)) {
 				return false;
