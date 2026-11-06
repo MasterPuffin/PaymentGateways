@@ -7,6 +7,7 @@ use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\ProviderInterface;
 use MasterPuffin\PaymentGateways\Status;
+use MasterPuffin\PaymentGateways\WebhookEvent;
 use Psr\Http\Message\RequestInterface;
 
 class Offline extends Base implements ProviderInterface {
@@ -39,5 +40,16 @@ class Offline extends Base implements ProviderInterface {
 
 	public function getProviderIdFromWebhook(RequestInterface $request): ?string {
 		return null;
+	}
+
+	public function getProviderIdsFromWebhook(RequestInterface $request): array {
+		return [];
+	}
+
+	/**
+	 * @throws GatewayException
+	 */
+	public function parseWebhook(Payment $payment, RequestInterface $request): WebhookEvent {
+		throw new GatewayException("parseWebhook is not possible with offline provider");
 	}
 }

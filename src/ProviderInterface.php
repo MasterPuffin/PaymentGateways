@@ -20,4 +20,17 @@ interface ProviderInterface {
 	 * looked up before {@see getStatusFromWebhook()} verifies the event. The value is not verified yet.
 	 */
 	public function getProviderIdFromWebhook(RequestInterface $request): ?string;
+
+	/**
+	 * All ids a payment of the webhook may be saved with, most specific first (e.g. the Checkout session and the payment
+	 * intent of Stripe). Not verified yet.
+	 *
+	 * @return string[]
+	 */
+	public function getProviderIdsFromWebhook(RequestInterface $request): array;
+
+	/**
+	 * Verifies the webhook and tells what it means for the payment.
+	 */
+	public function parseWebhook(Payment $payment, RequestInterface $request): WebhookEvent;
 }
