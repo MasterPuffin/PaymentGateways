@@ -188,13 +188,36 @@ class PayPal_REST extends Base implements ProviderInterface {
 	}
 
 	/**
-	 * PayPal's payload is not signed and doesn't tell refund or dispute amounts in a trusted way, so only the status
-	 * (fetched from the API, see {@see getStatusFromWebhook()}) is known.
+	 * PayPal's payload is not signed, so status (see {@see getStatusFromWebhook()}) and refund total
+	 * (see {@see _getRefundedTotal()}) come from the API. The amount of a dispute stays unknown.
 	 *
 	 * @throws GatewayException
 	 */
 	public function parseWebhook(Payment $payment, RequestInterface $request): WebhookEvent {
-		return new WebhookEvent($this->getStatusFromWebhook($payment, $request));
+		return new WebhookEvent($this->getStatusFromWebhook($payment, $request), refundedTotal: $this->_getRefundedTotal($payment, $request));
+	}
+
+	/**
+	 * Sum of all refunds of the capture after a refund event. Only the refund id is taken from the payload: the sum comes
+	 * from the API, and only if that refund belongs to the payment's capture.
+	 *
+	 * @return float|null Null for other events, or if the refund doesn't belong to the capture
+	 * @throws GatewayException
+	 */
+	private function _getRefundedTotal(Payment $payment, RequestInterface $request): ?float {
+		$payload = json_decode($this->_getWebhookBody($request));
+		$refundId = $payload->resource->id ?? null;
+		if (!in_array($payload->event_type ?? null, ['PAYMENT.CAPTURE.REFUNDED', 'PAYMENT.CAPTURE.REVERSED'], true) || !is_string($refundId)) {
+			return null;
+		}
+		$refund = $this->_call(fn(PaypalServerSdkClient $client) => $client->getPaymentsController()->getRefund(['refundId' => $refundId]));
+		foreach ($refund->getLinks() ?? [] as $link) {
+			if ($link->getRel() === 'up' && str_ends_with((string)$link->getHref(), '/v2/payments/captures/' . $payment->getProviderId())) {
+				$total = $refund->getSellerPayableBreakdown()?->getTotalRefundedAmount()?->getValue();
+				return is_numeric($total) ? (float)$total : null;
+			}
+		}
+		return null;
 	}
 
 	public function getProviderIdsFromWebhook(RequestInterface $request): array {

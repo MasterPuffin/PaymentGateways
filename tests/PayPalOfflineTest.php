@@ -12,13 +12,14 @@ use PaypalServerSdkLib\Controllers\PaymentsController;
 use PaypalServerSdkLib\Http\ApiResponse;
 use PaypalServerSdkLib\Models\AuthorizationWithAdditionalData;
 use PaypalServerSdkLib\Models\CapturedPayment;
-use PaypalServerSdkLib\Models\LinkDescription;
 use PaypalServerSdkLib\Models\Money;
 use PaypalServerSdkLib\Models\Order;
 use PaypalServerSdkLib\Models\OrderAuthorizeResponse;
 use PaypalServerSdkLib\Models\PaymentCollection;
 use PaypalServerSdkLib\Models\PurchaseUnit;
+use PaypalServerSdkLib\Models\LinkDescription;
 use PaypalServerSdkLib\Models\Refund;
+use PaypalServerSdkLib\Models\SellerPayableBreakdown;
 use PaypalServerSdkLib\PaypalServerSdkClient;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\RequestInterface;
@@ -149,6 +150,45 @@ class PayPalOfflineTest extends TestCase {
 
 		$this->assertSame(Status::Succeeded, $this->providerWithCapture('COMPLETED', $disputes)->parseWebhook($this->payment(Status::Disputed), $webhook)->status);
 		$this->assertSame(Status::Refunded, $this->providerWithCapture('REFUNDED', $disputes)->parseWebhook($this->payment(Status::Disputed), $webhook)->status);
+	}
+
+	/**
+	 * A provider whose API reports a partly refunded capture and refund REFUND1 of the given capture.
+	 */
+	private function providerWithRefund(string $captureId): FakePayPal {
+		$breakdown = new SellerPayableBreakdown();
+		$breakdown->setTotalRefundedAmount(new Money('EUR', '4.00'));
+		$refund = $this->refundResult('COMPLETED');
+		$refund->setSellerPayableBreakdown($breakdown);
+		$refund->setLinks([new LinkDescription('https://api.paypal.com/v2/payments/captures/' . $captureId, 'up')]);
+		$payments = $this->createStub(PaymentsController::class);
+		$payments->method('getCapturedPayment')->willReturn($this->response($this->capture('PARTIALLY_REFUNDED')));
+		$payments->method('getRefund')->willReturn($this->response($refund));
+		return $this->provider($payments);
+	}
+
+	/**
+	 * Parses the event of a partial refund made in the PayPal dashboard.
+	 * Why: Without the sum the money that went back stays unknown to the ledger. The payload is unsigned, so it comes
+	 * from the API.
+	 */
+	public function testARefundEventReportsTheTotalFromTheApi(): void {
+		$webhook = $this->webhook(['event_type' => 'PAYMENT.CAPTURE.REFUNDED', 'resource' => ['id' => 'REFUND1', 'amount' => ['value' => '999.00']]]);
+
+		$event = $this->providerWithRefund('CAPTURE1')->parseWebhook($this->payment(), $webhook);
+
+		$this->assertSame(Status::PartiallyRefunded, $event->status);
+		$this->assertSame(4.0, $event->refundedTotal);
+	}
+
+	/**
+	 * Parses a refund event that names the refund of another capture.
+	 * Why: Anyone can post to the endpoint. A foreign refund must not count for this payment.
+	 */
+	public function testARefundOfAnotherCaptureHasNoTotal(): void {
+		$webhook = $this->webhook(['event_type' => 'PAYMENT.CAPTURE.REFUNDED', 'resource' => ['id' => 'REFUND1']]);
+
+		$this->assertNull($this->providerWithRefund('OTHER')->parseWebhook($this->payment(), $webhook)->refundedTotal);
 	}
 
 	/**

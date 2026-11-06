@@ -4,6 +4,8 @@ namespace MasterPuffin\PaymentGateways\Tests;
 
 use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Status;
+use PaypalServerSdkLib\Models\Builders\MoneyBuilder;
+use PaypalServerSdkLib\Models\Builders\RefundRequestBuilder;
 use PHPUnit\Framework\Attributes\Group;
 
 /**
@@ -105,16 +107,21 @@ class PayPalTest extends NetworkTestCase {
 	}
 
 	/**
-	 * Parses a refund event of the simulator, whose payload names an amount.
-	 * Why: PayPal's payload is not trusted, so amounts stay unknown and callers must not book one from it.
+	 * Refunds a real capture twice and delivers refund events with the real refund ids and a forged amount.
+	 * Why: The payload is not trusted, so the sum must come from PayPal's API, also for refunds made in the dashboard.
 	 */
-	public function testAWebhookReportsNoAmounts(): void {
+	public function testARefundEventReportsTheTotalFromTheApi(): void {
 		$gateway = $this->paypal();
 		$payment = $this->payment();
 		$payment->setProviderId($this->payPayPalWithCard($payment));
-		$gateway->refund($payment, 4.0);
-
-		$event = $gateway->parseWebhook($payment, $this->paypalEvent('PAYMENT.CAPTURE.REFUNDED', function (object $e) use ($payment) {
+		$refund = fn(string $amount) => $this->paypalClient()->getPaymentsController()->refundCapturedPayment([
+			'captureId' => $payment->getProviderId(),
+			'prefer' => 'return=representation',
+			'body' => RefundRequestBuilder::init()->amount(MoneyBuilder::init('EUR', $amount)->build())->build(),
+		])->getResult()->getId();
+		$event = fn(string $refundId) => $gateway->parseWebhook($payment, $this->paypalEvent('PAYMENT.CAPTURE.REFUNDED', function (object $e) use ($payment, $refundId) {
+			$e->resource->id = $refundId;
+			$e->resource->amount->value = '999.00';
 			foreach ($e->resource->links as $link) {
 				if ($link->rel === 'up') {
 					$link->href = dirname($link->href) . '/' . $payment->getProviderId();
@@ -122,9 +129,12 @@ class PayPalTest extends NetworkTestCase {
 			}
 		}));
 
-		$this->assertSame(Status::PartiallyRefunded, $event->status);
-		$this->assertNull($event->refundedTotal);
-		$this->assertNull($event->disputedAmount);
+		$first = $event($refund('4.00'));
+		$this->assertSame(Status::PartiallyRefunded, $first->status);
+		$this->assertSame(4.0, $first->refundedTotal);
+		$this->assertNull($first->disputedAmount);
+
+		$this->assertSame(5.5, $event($refund('1.50'))->refundedTotal);
 	}
 
 	/**
