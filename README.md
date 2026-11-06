@@ -90,7 +90,7 @@ $event = $gateway->parseWebhook($payment, $request);
 ```
 `$event->status` is the status after the event (the stored one if the event doesn't change it). `$event->refundedTotal`
 is the sum of all refunds and `$event->disputedAmount` the chargeback, both in the major unit of the currency and null if
-unknown (PayPal doesn't tell them). With `$event->checkoutCompleted` the customer finished the Stripe Checkout page:
+unknown (PayPal's refund total is read from its API, a dispute amount is not known). With `$event->checkoutCompleted` the customer finished the Stripe Checkout page:
 call `execute()` to settle the payment, also when the customer never returns to your site.
 
 `Status::supersedes()` tells whether a reported status is outdated, webhooks arrive in any order.
