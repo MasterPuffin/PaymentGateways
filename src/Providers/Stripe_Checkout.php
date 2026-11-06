@@ -7,6 +7,7 @@ use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\ProviderInterface;
 use MasterPuffin\PaymentGateways\Status;
+use MasterPuffin\PaymentGateways\WebhookEvent;
 use Psr\Http\Message\RequestInterface;
 use Stripe\Charge;
 use Stripe\Checkout\Session;
@@ -18,6 +19,8 @@ use Stripe\Webhook;
 use Throwable;
 
 class Stripe_Checkout extends Base implements ProviderInterface {
+	/** Outcomes of a chargeback in which the seller keeps the money */
+	private const array DISPUTE_WON = ['won', 'warning_closed'];
 
 	/**
 	 * @throws GatewayException
@@ -31,7 +34,7 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 				'product_data' => [
 					'name' => $payment->getDescription(),
 				],
-				'unit_amount' => $this->_toMinorUnits($payment->getAmount()),
+				'unit_amount' => $this->_toMinorUnits($payment->getAmount(), $payment->getCurrencyCode()),
 			],
 			'quantity' => 1
 		]];
@@ -63,13 +66,21 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	}
 
 	/**
+	 * Settles the payment: resolves a Checkout session to its payment intent (the payment's provider id changes) and
+	 * captures an authorized payment. A session the customer has not completed yet is Open, an expired one Cancelled.
+	 *
 	 * @throws GatewayException
 	 */
 	public function execute(Payment $payment): Status {
 		Stripe::setApiKey($this->credentials['secret_key']);
 
+		$sessionStatus = $this->_resolveSession($payment);
+		if (!is_null($sessionStatus)) {
+			$payment->setStatus($sessionStatus);
+			return $sessionStatus;
+		}
 		try {
-			$paymentIntent = PaymentIntent::retrieve($this->_getPaymentIntentId($payment));
+			$paymentIntent = PaymentIntent::retrieve($payment->getProviderId());
 		} catch (Throwable $e) {
 			throw new GatewayException($e->getMessage());
 		}
@@ -84,21 +95,38 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 			}
 		}
 
-		$payment->setAmount($paymentIntent->amount / 100);
+		$payment->setAmount($this->_fromMinorUnits($paymentIntent->amount, $paymentIntent->currency));
 		$payment->setStatus($this->_mapStatus($paymentIntent->status));
 		return $payment->getStatus();
 	}
 
 	/**
-	 * Cancel a payment (works only if not yet fully processed/captured).
+	 * Cancel a payment (works only if not yet fully processed/captured). An open Checkout session is expired, so the
+	 * customer can no longer pay it.
 	 *
 	 * @throws GatewayException
 	 */
 	public function cancel(Payment $payment): void {
 		Stripe::setApiKey($this->credentials['secret_key']);
 
+		if (str_starts_with((string)$payment->getProviderId(), 'cs_')) {
+			try {
+				$session = Session::retrieve($payment->getProviderId());
+				if ($session->status === 'open') {
+					$session = $session->expire();
+				}
+			} catch (Throwable $e) {
+				throw new GatewayException("Cancel failed: " . $e->getMessage());
+			}
+			if ($session->status !== 'expired') {
+				throw new GatewayException("Checkout session cannot be cancelled (current status: {$session->status})");
+			}
+			$payment->setStatus(Status::Cancelled);
+			return;
+		}
+
 		try {
-			$intent = PaymentIntent::retrieve($this->_getPaymentIntentId($payment));
+			$intent = PaymentIntent::retrieve($payment->getProviderId());
 
 			// Only try to cancel if it's still cancelable
 			if (in_array($intent->status, ['requires_payment_method', 'requires_confirmation', 'requires_capture', 'processing'], true)) {
@@ -122,7 +150,7 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 			'payment_intent' => $payment->getProviderId(),
 		];
 		if (!is_null($amount)) {
-			$options['amount'] = $this->_toMinorUnits($amount);
+			$options['amount'] = $this->_toMinorUnits($amount, $payment->getCurrencyCode());
 		}
 		try {
 			$refund = Refund::create($options);
@@ -176,6 +204,44 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 		} catch (SignatureVerificationException|Exception $e) {
 			throw new GatewayException($e->getMessage());
 		}
+	}
+
+	/**
+	 * Verifies the event and maps it: payment intent events to their status, `checkout.session.completed` to a checkout
+	 * to settle with {@see execute()}, `checkout.session.expired` to Cancelled, `charge.refunded` with the sum of all
+	 * refunds of the charge (also of refunds made in the Stripe dashboard), `charge.dispute.created` with the disputed
+	 * amount, `charge.dispute.closed` to Succeeded if the seller won. While a payment is disputed only the closing of
+	 * the dispute changes it, a repeated `payment_intent.succeeded` doesn't. Other events keep the payment's status.
+	 *
+	 * @throws GatewayException The signature is invalid
+	 */
+	public function parseWebhook(Payment $payment, RequestInterface $request): WebhookEvent {
+		$status = $this->getStatusFromWebhook($payment, $request);
+		$event = json_decode($this->_getWebhookBody($request));
+		$object = $event->data->object ?? null;
+		$currency = (string)($object->currency ?? $payment->getCurrencyCode());
+		$amount = fn(string $field) => is_numeric($object->$field ?? null) ? $this->_fromMinorUnits($object->$field, $currency) : null;
+
+		return match ($event->type ?? null) {
+			'checkout.session.completed' => new WebhookEvent($payment->getStatus(), checkoutCompleted: true),
+			'checkout.session.expired' => new WebhookEvent(Status::Cancelled),
+			'charge.refunded' => new WebhookEvent($status, refundedTotal: $amount('amount_refunded')),
+			'charge.dispute.created' => new WebhookEvent(Status::Disputed, disputedAmount: $amount('amount')),
+			'charge.dispute.closed' => new WebhookEvent(in_array($object->status ?? null, self::DISPUTE_WON, true) ? Status::Succeeded : Status::Disputed),
+			default => new WebhookEvent($payment->getStatus() === Status::Disputed ? Status::Disputed : $status),
+		};
+	}
+
+	/**
+	 * The Checkout session (session events) and the payment intent the event refers to.
+	 */
+	public function getProviderIdsFromWebhook(RequestInterface $request): array {
+		$object = json_decode((string)$request->getBody())->data->object ?? null;
+		$session = $object->id ?? null;
+		return array_values(array_unique(array_filter([
+			is_string($session) && str_starts_with($session, 'cs_') ? $session : null,
+			$this->getProviderIdFromWebhook($request),
+		], 'is_string')));
 	}
 
 	/**
@@ -239,21 +305,24 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	}
 
 	/**
+	 * Replaces a Checkout session id with the id of its payment intent. Returns the status of a session that has none
+	 * (Open, or Cancelled once expired), null once the payment intent is the provider id.
+	 *
 	 * @throws GatewayException
 	 */
-	private function _getPaymentIntentId(Payment $payment): string {
-		if (str_starts_with($payment->getProviderId(), 'cs_')) {
-			try {
-				$session = Session::retrieve($payment->getProviderId());
-			} catch (Throwable $e) {
-				throw new GatewayException($e->getMessage());
-			}
-			$pi = $session->payment_intent;
-			if (empty($pi)) {
-				throw new GatewayException("Payment intent not found");
-			}
-			$payment->setProviderId($pi);
+	private function _resolveSession(Payment $payment): ?Status {
+		if (!str_starts_with((string)$payment->getProviderId(), 'cs_')) {
+			return null;
 		}
-		return $payment->getProviderId();
+		try {
+			$session = Session::retrieve($payment->getProviderId());
+		} catch (Throwable $e) {
+			throw new GatewayException($e->getMessage());
+		}
+		if (empty($session->payment_intent)) {
+			return $session->status === 'expired' ? Status::Cancelled : Status::Open;
+		}
+		$payment->setProviderId(is_string($session->payment_intent) ? $session->payment_intent : $session->payment_intent->id);
+		return null;
 	}
 }

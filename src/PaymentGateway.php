@@ -92,6 +92,26 @@ class PaymentGateway {
 		return $this->providerClass->getProviderIdFromWebhook($request);
 	}
 
+	/**
+	 * Ids to look up the saved payment for an incoming webhook, most specific first. Not verified, pass the payment to
+	 * {@see parseWebhook()} afterwards.
+	 *
+	 * @return string[]
+	 */
+	public function getProviderIdsFromWebhook(RequestInterface $request): array {
+		return $this->providerClass->getProviderIdsFromWebhook($request);
+	}
+
+	/**
+	 * Verifies an incoming webhook and tells what it means for the payment.
+	 *
+	 * @throws InvalidOptionsException|GatewayException The webhook can't be verified
+	 */
+	public function parseWebhook(Payment $payment, RequestInterface $request): WebhookEvent {
+		if (empty($payment->getProviderId()) && !$this->providerClass instanceof Offline) throw new InvalidOptionsException("providerId is required");
+		return $this->providerClass->parseWebhook($payment, $request);
+	}
+
 	public function setSuccessUrl(string $url): void {
 		$this->providerClass->setSuccessUrl($url);
 	}

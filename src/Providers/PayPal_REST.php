@@ -6,6 +6,7 @@ use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\ProviderInterface;
 use MasterPuffin\PaymentGateways\Status;
+use MasterPuffin\PaymentGateways\WebhookEvent;
 use PaypalServerSdkLib\Authentication\ClientCredentialsAuthCredentialsBuilder;
 use PaypalServerSdkLib\Environment;
 use PaypalServerSdkLib\Exceptions\ErrorException;
@@ -187,6 +188,21 @@ class PayPal_REST extends Base implements ProviderInterface {
 	}
 
 	/**
+	 * PayPal's payload is not signed and doesn't tell refund or dispute amounts in a trusted way, so only the status
+	 * (fetched from the API, see {@see getStatusFromWebhook()}) is known.
+	 *
+	 * @throws GatewayException
+	 */
+	public function parseWebhook(Payment $payment, RequestInterface $request): WebhookEvent {
+		return new WebhookEvent($this->getStatusFromWebhook($payment, $request));
+	}
+
+	public function getProviderIdsFromWebhook(RequestInterface $request): array {
+		$id = $this->getProviderIdFromWebhook($request);
+		return is_null($id) ? [] : [$id];
+	}
+
+	/**
 	 * Capture id the event refers to. Capture events carry the capture itself, refunds and reversals link to it ("up"),
 	 * disputes list it as seller transaction.
 	 */
@@ -229,6 +245,24 @@ class PayPal_REST extends Base implements ProviderInterface {
 		if (empty($disputeId)) {
 			return false;
 		}
+		$dispute = $this->_fetchDispute($disputeId);
+		if (($dispute->status ?? 'RESOLVED') === 'RESOLVED') {
+			return false;
+		}
+		foreach ($dispute->disputed_transactions ?? [] as $transaction) {
+			if (($transaction->seller_transaction_id ?? null) === $captureId) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The dispute as PayPal reports it. Protected, so tests can answer without PayPal.
+	 *
+	 * @throws GatewayException
+	 */
+	protected function _fetchDispute(string $disputeId): object {
 		$client = $this->_createClient();
 		try {
 			$token = $client->getClientCredentialsAuth()->fetchToken()->getAccessToken();
@@ -248,16 +282,7 @@ class PayPal_REST extends Base implements ProviderInterface {
 		if ($code !== 200 || !is_object($dispute)) {
 			throw new GatewayException($dispute->name ?? ('Dispute request failed with status ' . $code));
 		}
-
-		if (($dispute->status ?? 'RESOLVED') === 'RESOLVED') {
-			return false;
-		}
-		foreach ($dispute->disputed_transactions ?? [] as $transaction) {
-			if (($transaction->seller_transaction_id ?? null) === $captureId) {
-				return true;
-			}
-		}
-		return false;
+		return $dispute;
 	}
 
 	/**
@@ -281,7 +306,10 @@ class PayPal_REST extends Base implements ProviderInterface {
 		return $response->getResult();
 	}
 
-	private function _createClient(): PaypalServerSdkClient {
+	/**
+	 * Protected, so tests can replace the client and run everything else for real.
+	 */
+	protected function _createClient(): PaypalServerSdkClient {
 		return PaypalServerSdkClientBuilder::init()
 			->clientCredentialsAuthCredentials(ClientCredentialsAuthCredentialsBuilder::init(
 				$this->credentials['client_id'],

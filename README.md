@@ -1,4 +1,4 @@
-# Payment Gateways
+nau# Payment Gateways
 Integrate payments with just a few lines of code.
 
 ## Why does this exist?
@@ -79,3 +79,39 @@ The PayPal [Server SDK](https://github.com/paypal/PayPal-PHP-Server-SDK) has no 
 
 ### Disputes via PayPal webhooks
 Incoming PayPal webhooks can't be securely verified without preventing MITM attacks, so the payload is never trusted. For dispute events the library requests the dispute from the dispute API and only reports `Disputed` if it is unresolved and belongs to the payment's capture. Resolved disputes return the status of the capture.
+
+## Webhooks
+Look the stored payment up by the ids the webhook names, most specific first, then let the gateway verify and parse it:
+```
+foreach ($gateway->getProviderIdsFromWebhook($request) as $id) {
+    $payment ??= findStoredPayment($id);
+}
+$event = $gateway->parseWebhook($payment, $request);
+```
+`$event->status` is the status after the event (the stored one if the event doesn't change it). `$event->refundedTotal`
+is the sum of all refunds and `$event->disputedAmount` the chargeback, both in the major unit of the currency and null if
+unknown (PayPal doesn't tell them). With `$event->checkoutCompleted` the customer finished the Stripe Checkout page:
+call `execute()` to settle the payment, also when the customer never returns to your site.
+
+`Status::supersedes()` tells whether a reported status is outdated, webhooks arrive in any order.
+`execute()` returns `Open` for a Stripe Checkout session the customer has not completed and `Cancelled` for an expired
+one; `cancel()` expires an open session.
+
+## Tests
+Every provider behaviour is tested against the real test APIs (`tests/StripeTest.php`, `tests/PayPalTest.php`, base
+`tests/NetworkTestCase.php`). They run only with credentials in the environment and are skipped otherwise:
+```
+export STRIPE_TEST_SECRET_KEY=sk_test_...
+export PAYPAL_SANDBOX_CLIENT_ID=...
+export PAYPAL_SANDBOX_SECRET=...
+vendor/bin/phpunit
+```
+Only test objects are created: Stripe payments with test cards and the test IBAN, PayPal payments with sandbox cards
+(card processing must be enabled for the sandbox app). The Stripe Checkout page and PayPal's approval page need a buyer
+in the browser, so payments are made through the API. Stripe webhooks are the real events from the Events API, PayPal
+webhooks the payloads of PayPal's webhook simulator. A full run takes a few minutes, it waits for Stripe's events and
+disputes.
+
+Offline (`*OfflineTest.php`, `StatusTest.php`) is only what the providers can't produce on request: a completed Stripe
+Checkout, PayPal disputes, the return after a PayPal approval, rare capture statuses and failures (`tests/FakePayPal.php`
+replaces PayPal's SDK client).

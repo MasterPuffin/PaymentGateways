@@ -42,11 +42,27 @@ class Base {
 	}
 
 	/**
-	 * Converts an amount to the smallest currency unit (cents). Rounds instead of truncating, because floats like
-	 * 19.99 * 100 = 1998.9999… would otherwise lose a cent.
+	 * Currencies without minor unit, their amounts are whole numbers (https://docs.stripe.com/currencies#zero-decimal)
 	 */
-	protected function _toMinorUnits(float $amount): int {
-		return (int)round($amount * 100);
+	private const array ZERO_DECIMAL_CURRENCIES = ['BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF'];
+
+	/**
+	 * Converts an amount to the smallest currency unit (cents, or the amount itself for currencies without minor unit).
+	 * Rounds instead of truncating, because floats like 19.99 * 100 = 1998.9999… would otherwise lose a cent.
+	 */
+	protected function _toMinorUnits(float $amount, string $currency): int {
+		return (int)round($amount * $this->_minorUnitFactor($currency));
+	}
+
+	/**
+	 * Converts an amount in the smallest currency unit back, see {@see _toMinorUnits()}.
+	 */
+	protected function _fromMinorUnits(int|float $amount, string $currency): float {
+		return $amount / $this->_minorUnitFactor($currency);
+	}
+
+	private function _minorUnitFactor(string $currency): int {
+		return in_array(strtoupper($currency), self::ZERO_DECIMAL_CURRENCIES, true) ? 1 : 100;
 	}
 
 	/**
@@ -60,7 +76,7 @@ class Base {
 	 * A refund without amount or with (at least) the full amount of the payment is a full refund.
 	 */
 	protected function _isFullRefund(Payment $payment, ?float $amount): bool {
-		return is_null($amount) || $this->_toMinorUnits($amount) >= $this->_toMinorUnits($payment->getAmount());
+		return is_null($amount) || $this->_toMinorUnits($amount, $payment->getCurrencyCode()) >= $this->_toMinorUnits($payment->getAmount(), $payment->getCurrencyCode());
 	}
 
 	/**
