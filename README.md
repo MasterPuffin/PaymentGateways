@@ -4,9 +4,9 @@ Integrate payments with just a few lines of code.
 ## Why does this exist?
 There are two main reasons which no other payment library offered which made me write this library:
 1. I want a unified approach to process payments from different payment providers. This means I want to always call the same function in the same order regardless of the process of the payment provider.
-   This rules out using the libraries of the payment providers on their own. This also rules out (Omnipay)[https://omnipay.thephpleague.com].
+   This rules out using the libraries of the payment providers on their own. This also rules out [Omnipay](https://omnipay.thephpleague.com).
 2. It should be simple to use and shouldn't require a framework like Laravel or Symfony.
-   This rules out (Payum)[https://github.com/Payum/Payum]
+   This rules out [Payum](https://github.com/Payum/Payum).
 
 ## What does it do?
 It creates the payment and returns the redirection url to the payment provider.
@@ -53,10 +53,10 @@ After the user has been redirected back to your site, execute/capture and verify
 $gateway = new PaymentGateway(Provider::Stripe, ['secret_key' => 'abc'], ['payment_method_types' => ['card']]);
 $result = $gateway->execute($payment);
 ```
-You can now use the result (which can be different eg. succeeded, pending or failed). It is best practice to check if the cart has been modified during the checkout process, by comparing $payment->getAmount() with the amount of the cart.
+You can now use the result (which can be different e.g. succeeded, pending or failed). It is best practice to check if the cart has been modified during the checkout process, by comparing $payment->getAmount() with the amount of the cart.
 
 **Important!**
-Some Stripe Payment methods don't allow asynchronous capture (eg. SEPA debit). This library tries to use asynchronous capture, whenever possible. Where not possible, that payment will be created and captured on `create`. The best way to handle this, is either avoiding payment methods which can't be captured asynchronously or to call `$paymentGateway->cancel($payment)` which cancels the payment. This however only works, if the payment state is pending.  
+Some Stripe Payment methods don't allow asynchronous capture (e.g. SEPA debit). This library tries to use asynchronous capture, whenever possible. Where not possible, that payment will be created and captured on `create`. The best way to handle this, is either avoiding payment methods which can't be captured asynchronously or to call `$paymentGateway->cancel($payment)` which cancels the payment. This however only works, if the payment state is pending.  
 See the [Stripe Docs](https://docs.stripe.com/payments/payment-methods/payment-method-support) for more info.
 
 ### Webhooks
