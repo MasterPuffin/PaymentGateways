@@ -155,18 +155,52 @@ class PayPal_REST extends Base implements ProviderInterface {
 		$payment->setStatus($isFullRefund ? Status::Refunded : Status::PartiallyRefunded);
 	}
 
+	/** Outcome codes of a resolved dispute in which the seller keeps the money (PayPal covered it, or the claim ended) */
+	private const array DISPUTE_WON = ['RESOLVED_SELLER_FAVOUR', 'RESOLVED_WITH_PAYOUT', 'CANCELED_BY_BUYER', 'DENIED'];
+
 	/**
 	 * The webhook payload is not trusted (its signature is not checked): the status is always fetched from the PayPal
 	 * API for the saved capture, a dispute is only reported if the API confirms an open dispute for this capture.
 	 *
 	 * The capture stays COMPLETED while it is disputed. So for a payment that is disputed, a COMPLETED capture only means
-	 * Succeeded (dispute won) if the event names a dispute of this capture that the API confirms as resolved; any other
-	 * event (e.g. a redelivered or forged PAYMENT.CAPTURE.COMPLETED, a dispute of another capture) keeps it Disputed.
-	 * Refunds and reversals of the capture (e.g. after a lost dispute) are reported as they are.
+	 * Succeeded (dispute won) if the event names a dispute of this capture that the API confirms as resolved in favour
+	 * of the seller ({@see self::DISPUTE_WON}); any other event (e.g. a redelivered or forged PAYMENT.CAPTURE.COMPLETED,
+	 * a dispute of another capture, a dispute resolved for the buyer) keeps it Disputed. Refunds and reversals of the
+	 * capture (e.g. after a lost dispute) are reported as they are.
 	 *
 	 * @throws GatewayException
 	 */
 	public function getStatusFromWebhook(Payment $payment, RequestInterface|null $request = null): Status {
+		return $this->_evaluateWebhook($payment, $request)[0];
+	}
+
+	/**
+	 * PayPal's payload is not signed, so status (see {@see getStatusFromWebhook()}), refund total
+	 * (see {@see _getRefundedTotal()}) and the dispute's amount and id come from the API. Succeeded for a disputed
+	 * payment is only reported for a dispute of this capture resolved in favour of the seller, so it is a won dispute.
+	 *
+	 * @throws GatewayException
+	 */
+	public function parseWebhook(Payment $payment, RequestInterface $request): WebhookEvent {
+		[$status, $dispute, $won] = $this->_evaluateWebhook($payment, $request);
+		$amount = $dispute->dispute_amount->value ?? null;
+		return new WebhookEvent(
+			$status,
+			refundedTotal: $this->_getRefundedTotal($payment, $request),
+			disputedAmount: !is_null($dispute) && is_numeric($amount) ? (float)$amount : null,
+			disputeWon: $won && $status === Status::Succeeded,
+			disputeId: is_string($dispute->dispute_id ?? null) ? $dispute->dispute_id : null,
+		);
+	}
+
+	/**
+	 * Status of the payment after the event, the dispute of this capture the event names (as the API reports it, null
+	 * for other events) and whether that dispute was resolved in favour of the seller.
+	 *
+	 * @return array{Status, object|null, bool}
+	 * @throws GatewayException
+	 */
+	private function _evaluateWebhook(Payment $payment, RequestInterface|null $request): array {
 		$payload = json_decode($this->_getWebhookBody($request));
 		$eventType = $payload->event_type ?? null;
 		if (!in_array($eventType, [
@@ -181,33 +215,26 @@ class PayPal_REST extends Base implements ProviderInterface {
 			'CUSTOMER.DISPUTE.UPDATED',
 			'CUSTOMER.DISPUTE.RESOLVED',
 		], true)) {
-			return $payment->getStatus();
+			return [$payment->getStatus(), null, false];
 		}
 
-		$dispute = str_starts_with($eventType, 'CUSTOMER.DISPUTE.') ? $this->_getDisputeOfCapture($payload->resource->dispute_id ?? $payload->resource->id ?? null, $payment->getProviderId()) : null;
+		$disputeId = $payload->resource->dispute_id ?? $payload->resource->id ?? null;
+		$dispute = str_starts_with($eventType, 'CUSTOMER.DISPUTE.') ? $this->_getDisputeOfCapture(is_string($disputeId) ? $disputeId : null, $payment->getProviderId()) : null;
+		if (!is_null($dispute) && is_string($disputeId)) {
+			$dispute->dispute_id ??= $disputeId;
+		}
 		$resolved = ($dispute->status ?? null) === 'RESOLVED';
 		if (!is_null($dispute) && !$resolved) {
-			return Status::Disputed;
+			return [Status::Disputed, $dispute, false];
 		}
+		$won = $resolved && in_array($dispute->dispute_outcome->outcome_code ?? null, self::DISPUTE_WON, true);
 
 		//Resolved disputes and all other events: the capture shows the outcome (e.g. refunded after a lost dispute)
 		$status = $this->_mapToStatus((string)$this->_getCapture($payment->getProviderId())->getStatus());
-		if ($status === Status::Succeeded && $payment->getStatus() === Status::Disputed && !$resolved) {
-			return Status::Disputed;
+		if ($status === Status::Succeeded && $payment->getStatus() === Status::Disputed && !$won) {
+			return [Status::Disputed, $dispute, false];
 		}
-		return $status;
-	}
-
-	/**
-	 * PayPal's payload is not signed, so status (see {@see getStatusFromWebhook()}) and refund total
-	 * (see {@see _getRefundedTotal()}) come from the API. The amount of a dispute stays unknown. Succeeded for a disputed
-	 * payment is only reported for a dispute of this capture resolved in favour of the seller, so it is a won dispute.
-	 *
-	 * @throws GatewayException
-	 */
-	public function parseWebhook(Payment $payment, RequestInterface $request): WebhookEvent {
-		$status = $this->getStatusFromWebhook($payment, $request);
-		return new WebhookEvent($status, refundedTotal: $this->_getRefundedTotal($payment, $request), disputeWon: $status === Status::Succeeded && $payment->getStatus() === Status::Disputed);
+		return [$status, $dispute, $won];
 	}
 
 	/**

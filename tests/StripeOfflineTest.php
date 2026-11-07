@@ -67,6 +67,49 @@ class StripeOfflineTest extends TestCase {
 	}
 
 	/**
+	 * Parses the events of an inquiry: opened (`warning_needs_response`), escalated to a chargeback (`updated` to
+	 * `needs_response`), and an inquiry that closed without chargeback (`warning_closed`).
+	 * Why: An inquiry withdraws no funds. Reported as Disputed, the caller's ledger would show the money as gone for up
+	 * to 120 days although it never left. Its escalation comes as an update of the same dispute, not as a new one.
+	 */
+	public function testAnInquiryIsNoChargebackUntilItIsEscalated(): void {
+		$gateway = new PaymentGateway(Provider::Stripe_Checkout, ['secret_key' => 'sk_test', 'webhook_secret' => self::SECRET]);
+		$payment = new Payment();
+		$payment->setProviderId('pi_123');
+		$payment->setCurrencyCode('EUR');
+		$payment->setStatus(Status::Succeeded);
+		$dispute = fn(string $status) => ['id' => 'dp_1', 'object' => 'dispute', 'payment_intent' => 'pi_123', 'amount' => 1000, 'currency' => 'eur', 'status' => $status];
+
+		$inquiry = $gateway->parseWebhook($payment, $this->event('charge.dispute.created', $dispute('warning_needs_response')));
+		$escalated = $gateway->parseWebhook($payment, $this->event('charge.dispute.updated', $dispute('needs_response')));
+		$closed = $gateway->parseWebhook($payment, $this->event('charge.dispute.closed', $dispute('warning_closed')));
+
+		$this->assertSame([Status::Succeeded, null, 'dp_1'], [$inquiry->status, $inquiry->disputedAmount, $inquiry->disputeId]);
+		$this->assertSame([Status::Disputed, 10.0, 'dp_1'], [$escalated->status, $escalated->disputedAmount, $escalated->disputeId]);
+		$this->assertSame([Status::Succeeded, true, null], [$closed->status, $closed->disputeWon, $closed->disputedAmount]);
+	}
+
+	/**
+	 * Parses a won and a lost `charge.dispute.closed` with their amount.
+	 * Why: Events arrive in any order. Without the amount a caller could not book a dispute whose opening arrived late
+	 * or never: a lost one would leave the money in the ledger, a won one could not be told from an inquiry.
+	 */
+	public function testAClosedDisputeCarriesItsIdAndAmount(): void {
+		$gateway = new PaymentGateway(Provider::Stripe_Checkout, ['secret_key' => 'sk_test', 'webhook_secret' => self::SECRET]);
+		$payment = new Payment();
+		$payment->setProviderId('pi_123');
+		$payment->setCurrencyCode('EUR');
+		$payment->setStatus(Status::Succeeded);
+		$dispute = fn(string $status) => ['id' => 'dp_1', 'object' => 'dispute', 'payment_intent' => 'pi_123', 'amount' => 500, 'currency' => 'eur', 'status' => $status];
+
+		$won = $gateway->parseWebhook($payment, $this->event('charge.dispute.closed', $dispute('won')));
+		$lost = $gateway->parseWebhook($payment, $this->event('charge.dispute.closed', $dispute('lost')));
+
+		$this->assertSame([Status::Succeeded, true, 5.0, 'dp_1'], [$won->status, $won->disputeWon, $won->disputedAmount, $won->disputeId]);
+		$this->assertSame([Status::Disputed, false, 5.0, 'dp_1'], [$lost->status, $lost->disputeWon, $lost->disputedAmount, $lost->disputeId]);
+	}
+
+	/**
 	 * A signed event as Stripe sends it.
 	 */
 	private function event(string $type, array $object): RequestInterface {

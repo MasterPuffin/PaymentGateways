@@ -21,6 +21,8 @@ use Throwable;
 class Stripe_Checkout extends Base implements ProviderInterface {
 	/** Outcomes of a chargeback in which the seller keeps the money */
 	private const array DISPUTE_WON = ['won', 'warning_closed'];
+	/** Events of a dispute that is open; a non-inquiry dispute withdraws the disputed amount */
+	private const array DISPUTE_OPENED = ['charge.dispute.created', 'charge.dispute.updated', 'charge.dispute.funds_withdrawn'];
 
 	/**
 	 * @throws GatewayException
@@ -190,8 +192,9 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 				return $this->_mapStatus($status);
 			}
 
-			if ($event->type === 'charge.dispute.created') {
-				return Status::Disputed;
+			//An inquiry (status warning_*) withdraws no funds, the payment keeps its status until it is escalated
+			if (in_array($event->type, self::DISPUTE_OPENED, true)) {
+				return self::_isInquiry($event->data->object) ? $payment->getStatus() : Status::Disputed;
 			}
 
 			//The charge carries the sum of all refunds, a single refund.created event only its own amount
@@ -209,10 +212,16 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	/**
 	 * Verifies the event and maps it: payment intent events to their status, `checkout.session.completed` to a checkout
 	 * to settle with {@see execute()}, `checkout.session.expired` to Cancelled, `charge.refunded` with the sum of all
-	 * refunds of the charge (also of refunds made in the Stripe dashboard), `charge.dispute.created` with the disputed
-	 * amount, `charge.dispute.closed` to Succeeded with {@see WebhookEvent::$disputeWon} if the seller won. While a
-	 * payment is disputed only the closing of the dispute changes it, a repeated `payment_intent.succeeded` doesn't.
-	 * Other events keep the payment's status.
+	 * refunds of the charge (also of refunds made in the Stripe dashboard). While a payment is disputed only the closing
+	 * of the dispute changes it, a repeated `payment_intent.succeeded` doesn't. Other events keep the payment's status.
+	 *
+	 * Dispute events carry the dispute id ({@see WebhookEvent::$disputeId}), events arrive in any order and repeatedly:
+	 *  - `charge.dispute.created`, `.updated` and `.funds_withdrawn` report Disputed with the disputed amount. An inquiry
+	 *    (status `warning_needs_response`, `warning_under_review`) withdraws no funds and keeps the payment's status;
+	 *    when it is escalated, the same dispute is updated to `needs_response`.
+	 *  - `charge.dispute.closed` won reports Succeeded with {@see WebhookEvent::$disputeWon} and the amount that comes
+	 *    back, `warning_closed` (an inquiry that ended without chargeback) with no amount, as no funds moved. Lost
+	 *    reports Disputed with the amount, so a lost dispute whose opening never arrived is still booked.
 	 *
 	 * @throws GatewayException The signature is invalid
 	 */
@@ -222,15 +231,32 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 		$object = $event->data->object ?? null;
 		$currency = (string)($object->currency ?? $payment->getCurrencyCode());
 		$amount = fn(string $field) => is_numeric($object->$field ?? null) ? $this->_fromMinorUnits($object->$field, $currency) : null;
+		$disputeId = is_string($object->id ?? null) ? $object->id : null;
+		$type = $event->type ?? null;
 
-		return match ($event->type ?? null) {
+		if (in_array($type, self::DISPUTE_OPENED, true)) {
+			return self::_isInquiry($object) ? new WebhookEvent($status, disputeId: $disputeId) : new WebhookEvent(Status::Disputed, disputedAmount: $amount('amount'), disputeId: $disputeId);
+		}
+		if ($type === 'charge.dispute.closed') {
+			$closedAs = $object->status ?? null;
+			if (!in_array($closedAs, self::DISPUTE_WON, true)) {
+				return new WebhookEvent(Status::Disputed, disputedAmount: $amount('amount'), disputeId: $disputeId);
+			}
+			return new WebhookEvent(Status::Succeeded, disputedAmount: $closedAs === 'won' ? $amount('amount') : null, disputeWon: true, disputeId: $disputeId);
+		}
+		return match ($type) {
 			'checkout.session.completed' => new WebhookEvent($payment->getStatus(), checkoutCompleted: true),
 			'checkout.session.expired' => new WebhookEvent(Status::Cancelled),
 			'charge.refunded' => new WebhookEvent($status, refundedTotal: $amount('amount_refunded')),
-			'charge.dispute.created' => new WebhookEvent(Status::Disputed, disputedAmount: $amount('amount')),
-			'charge.dispute.closed' => in_array($object->status ?? null, self::DISPUTE_WON, true) ? new WebhookEvent(Status::Succeeded, disputeWon: true) : new WebhookEvent(Status::Disputed),
 			default => new WebhookEvent($payment->getStatus() === Status::Disputed ? Status::Disputed : $status),
 		};
+	}
+
+	/**
+	 * Whether the dispute is an inquiry (status `warning_*`): the customer's bank asks, no funds are withdrawn.
+	 */
+	private static function _isInquiry(?object $dispute): bool {
+		return str_starts_with((string)($dispute->status ?? ''), 'warning_');
 	}
 
 	/**
