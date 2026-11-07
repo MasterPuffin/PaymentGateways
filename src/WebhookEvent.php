@@ -13,12 +13,16 @@ final class WebhookEvent {
 	 * @param float|null $disputedAmount Amount of a chargeback, null if the event doesn't tell it (the whole payment)
 	 * @param bool $checkoutCompleted The customer completed the checkout page. The payment is not settled yet: call
 	 *     {@see PaymentGateway::execute()}, which also captures authorized payments
+	 * @param bool $disputeWon The dispute of the payment was closed in favour of the seller, the money is back (status
+	 *     Succeeded). Only this ends a chargeback: a Succeeded without it is no decision about a dispute, e.g. a
+	 *     redelivered success event or the state of a PayPal capture, which stays COMPLETED while it is disputed
 	 */
 	public function __construct(
 		public readonly Status $status,
 		public readonly ?float $refundedTotal = null,
 		public readonly ?float $disputedAmount = null,
 		public readonly bool $checkoutCompleted = false,
+		public readonly bool $disputeWon = false,
 	) {
 	}
 }

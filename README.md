@@ -78,7 +78,7 @@ If you just want to integrate payments, then yes. If you need any more functiona
 The PayPal [Server SDK](https://github.com/paypal/PayPal-PHP-Server-SDK) has no disputes API, so the dispute check calls it directly with the SDK's OAuth token (requires `ext-curl`).
 
 ### Disputes via PayPal webhooks
-Incoming PayPal webhooks can't be securely verified without preventing MITM attacks, so the payload is never trusted. For dispute events the library requests the dispute from the dispute API and only reports `Disputed` if it is unresolved and belongs to the payment's capture. Resolved disputes return the status of the capture.
+Incoming PayPal webhooks can't be securely verified without preventing MITM attacks, so the payload is never trusted. For dispute events the library requests the dispute from the dispute API and only reports `Disputed` if it is unresolved and belongs to the payment's capture. Resolved disputes return the status of the capture. A capture stays `COMPLETED` while it is disputed, so for a payment stored as `Disputed` a completed capture is only reported as `Succeeded` (with `disputeWon`) for a dispute of this capture that the API confirms as resolved; every other event keeps it `Disputed`.
 
 ## Webhooks
 Look the stored payment up by the ids the webhook names, most specific first, then let the gateway verify and parse it:
@@ -92,6 +92,10 @@ $event = $gateway->parseWebhook($payment, $request);
 is the sum of all refunds and `$event->disputedAmount` the chargeback, both in the major unit of the currency and null if
 unknown (PayPal's refund total is read from its API, a dispute amount is not known). With `$event->checkoutCompleted` the customer finished the Stripe Checkout page:
 call `execute()` to settle the payment, also when the customer never returns to your site.
+`$event->disputeWon` is true only when the dispute of the payment was closed in favour of the seller (Stripe
+`charge.dispute.closed` won, PayPal a resolved dispute of the capture that stayed completed). Only then end a chargeback
+in your ledger: a `Succeeded` without it is no decision about a dispute, e.g. a redelivered success event. Pass the
+stored status to `parseWebhook()` (read it under the lock you process the payment with), both providers answer by it.
 
 `Status::supersedes()` tells whether a reported status is outdated, webhooks arrive in any order.
 `execute()` returns `Open` for a Stripe Checkout session the customer has not completed and `Cancelled` for an expired
@@ -113,5 +117,5 @@ webhooks the payloads of PayPal's webhook simulator. A full run takes a few minu
 disputes.
 
 Offline (`*OfflineTest.php`, `StatusTest.php`) is only what the providers can't produce on request: a completed Stripe
-Checkout, PayPal disputes, the return after a PayPal approval, rare capture statuses and failures (`tests/FakePayPal.php`
+Checkout, closed Stripe disputes, PayPal disputes, the return after a PayPal approval, rare capture statuses and failures (`tests/FakePayPal.php`
 replaces PayPal's SDK client).

@@ -159,6 +159,11 @@ class PayPal_REST extends Base implements ProviderInterface {
 	 * The webhook payload is not trusted (its signature is not checked): the status is always fetched from the PayPal
 	 * API for the saved capture, a dispute is only reported if the API confirms an open dispute for this capture.
 	 *
+	 * The capture stays COMPLETED while it is disputed. So for a payment that is disputed, a COMPLETED capture only means
+	 * Succeeded (dispute won) if the event names a dispute of this capture that the API confirms as resolved; any other
+	 * event (e.g. a redelivered or forged PAYMENT.CAPTURE.COMPLETED, a dispute of another capture) keeps it Disputed.
+	 * Refunds and reversals of the capture (e.g. after a lost dispute) are reported as they are.
+	 *
 	 * @throws GatewayException
 	 */
 	public function getStatusFromWebhook(Payment $payment, RequestInterface|null $request = null): Status {
@@ -179,22 +184,30 @@ class PayPal_REST extends Base implements ProviderInterface {
 			return $payment->getStatus();
 		}
 
-		if (str_starts_with($eventType, 'CUSTOMER.DISPUTE.') && $this->_hasOpenDispute($payload->resource->dispute_id ?? $payload->resource->id ?? null, $payment->getProviderId())) {
+		$dispute = str_starts_with($eventType, 'CUSTOMER.DISPUTE.') ? $this->_getDisputeOfCapture($payload->resource->dispute_id ?? $payload->resource->id ?? null, $payment->getProviderId()) : null;
+		$resolved = ($dispute->status ?? null) === 'RESOLVED';
+		if (!is_null($dispute) && !$resolved) {
 			return Status::Disputed;
 		}
 
 		//Resolved disputes and all other events: the capture shows the outcome (e.g. refunded after a lost dispute)
-		return $this->_mapToStatus((string)$this->_getCapture($payment->getProviderId())->getStatus());
+		$status = $this->_mapToStatus((string)$this->_getCapture($payment->getProviderId())->getStatus());
+		if ($status === Status::Succeeded && $payment->getStatus() === Status::Disputed && !$resolved) {
+			return Status::Disputed;
+		}
+		return $status;
 	}
 
 	/**
 	 * PayPal's payload is not signed, so status (see {@see getStatusFromWebhook()}) and refund total
-	 * (see {@see _getRefundedTotal()}) come from the API. The amount of a dispute stays unknown.
+	 * (see {@see _getRefundedTotal()}) come from the API. The amount of a dispute stays unknown. Succeeded for a disputed
+	 * payment is only reported for a dispute of this capture resolved in favour of the seller, so it is a won dispute.
 	 *
 	 * @throws GatewayException
 	 */
 	public function parseWebhook(Payment $payment, RequestInterface $request): WebhookEvent {
-		return new WebhookEvent($this->getStatusFromWebhook($payment, $request), refundedTotal: $this->_getRefundedTotal($payment, $request));
+		$status = $this->getStatusFromWebhook($payment, $request);
+		return new WebhookEvent($status, refundedTotal: $this->_getRefundedTotal($payment, $request), disputeWon: $status === Status::Succeeded && $payment->getStatus() === Status::Disputed);
 	}
 
 	/**
@@ -259,25 +272,23 @@ class PayPal_REST extends Base implements ProviderInterface {
 	}
 
 	/**
-	 * Whether PayPal knows an unresolved dispute with this id for the given capture. The SDK has no disputes API,
-	 * so the request uses the SDK's OAuth token directly.
+	 * The dispute with this id as PayPal reports it, if it is a dispute of the given capture. The SDK has no disputes
+	 * API, so the request uses the SDK's OAuth token directly.
 	 *
+	 * @return object|null Null without id or for a dispute of another capture
 	 * @throws GatewayException
 	 */
-	private function _hasOpenDispute(?string $disputeId, string $captureId): bool {
+	private function _getDisputeOfCapture(?string $disputeId, string $captureId): ?object {
 		if (empty($disputeId)) {
-			return false;
+			return null;
 		}
 		$dispute = $this->_fetchDispute($disputeId);
-		if (($dispute->status ?? 'RESOLVED') === 'RESOLVED') {
-			return false;
-		}
 		foreach ($dispute->disputed_transactions ?? [] as $transaction) {
 			if (($transaction->seller_transaction_id ?? null) === $captureId) {
-				return true;
+				return $dispute;
 			}
 		}
-		return false;
+		return null;
 	}
 
 	/**

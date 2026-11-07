@@ -210,8 +210,9 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	 * Verifies the event and maps it: payment intent events to their status, `checkout.session.completed` to a checkout
 	 * to settle with {@see execute()}, `checkout.session.expired` to Cancelled, `charge.refunded` with the sum of all
 	 * refunds of the charge (also of refunds made in the Stripe dashboard), `charge.dispute.created` with the disputed
-	 * amount, `charge.dispute.closed` to Succeeded if the seller won. While a payment is disputed only the closing of
-	 * the dispute changes it, a repeated `payment_intent.succeeded` doesn't. Other events keep the payment's status.
+	 * amount, `charge.dispute.closed` to Succeeded with {@see WebhookEvent::$disputeWon} if the seller won. While a
+	 * payment is disputed only the closing of the dispute changes it, a repeated `payment_intent.succeeded` doesn't.
+	 * Other events keep the payment's status.
 	 *
 	 * @throws GatewayException The signature is invalid
 	 */
@@ -227,7 +228,7 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 			'checkout.session.expired' => new WebhookEvent(Status::Cancelled),
 			'charge.refunded' => new WebhookEvent($status, refundedTotal: $amount('amount_refunded')),
 			'charge.dispute.created' => new WebhookEvent(Status::Disputed, disputedAmount: $amount('amount')),
-			'charge.dispute.closed' => new WebhookEvent(in_array($object->status ?? null, self::DISPUTE_WON, true) ? Status::Succeeded : Status::Disputed),
+			'charge.dispute.closed' => in_array($object->status ?? null, self::DISPUTE_WON, true) ? new WebhookEvent(Status::Succeeded, disputeWon: true) : new WebhookEvent(Status::Disputed),
 			default => new WebhookEvent($payment->getStatus() === Status::Disputed ? Status::Disputed : $status),
 		};
 	}

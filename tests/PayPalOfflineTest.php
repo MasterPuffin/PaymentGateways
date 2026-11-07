@@ -142,14 +142,42 @@ class PayPalOfflineTest extends TestCase {
 
 	/**
 	 * Parses the end of a dispute of this capture, once won (capture completed) and once lost (capture refunded).
-	 * Why: The capture shows the outcome. COMPLETED after a dispute is what brings the money back in the caller's ledger.
+	 * Why: The capture shows the outcome. COMPLETED after a dispute is what brings the money back in the caller's ledger,
+	 * so only it carries `disputeWon`.
 	 */
 	public function testAResolvedDisputeShowsTheOutcomeOfTheCapture(): void {
 		$disputes = ['DISPUTE1' => (object)['status' => 'RESOLVED', 'disputed_transactions' => [(object)['seller_transaction_id' => 'CAPTURE1']]]];
 		$webhook = $this->webhook(['event_type' => 'CUSTOMER.DISPUTE.RESOLVED', 'resource' => ['dispute_id' => 'DISPUTE1']]);
 
-		$this->assertSame(Status::Succeeded, $this->providerWithCapture('COMPLETED', $disputes)->parseWebhook($this->payment(Status::Disputed), $webhook)->status);
-		$this->assertSame(Status::Refunded, $this->providerWithCapture('REFUNDED', $disputes)->parseWebhook($this->payment(Status::Disputed), $webhook)->status);
+		$won = $this->providerWithCapture('COMPLETED', $disputes)->parseWebhook($this->payment(Status::Disputed), $webhook);
+		$lost = $this->providerWithCapture('REFUNDED', $disputes)->parseWebhook($this->payment(Status::Disputed), $webhook);
+
+		$this->assertSame([Status::Succeeded, true], [$won->status, $won->disputeWon]);
+		$this->assertSame([Status::Refunded, false], [$lost->status, $lost->disputeWon]);
+	}
+
+	/**
+	 * Parses events of a disputed payment whose capture is still COMPLETED: a capture event, an open dispute of this
+	 * capture, and a resolved dispute of another capture.
+	 * Why: The capture stays COMPLETED while it is disputed. Read as Succeeded, a redelivered or forged (the payload is
+	 * unsigned) event would end a chargeback that is still open: money shown that is gone.
+	 */
+	public function testACompletedCaptureDoesNotEndAnOpenDispute(): void {
+		$disputes = [
+			'OPEN' => (object)['status' => 'WAITING_FOR_SELLER_RESPONSE', 'disputed_transactions' => [(object)['seller_transaction_id' => 'CAPTURE1']]],
+			'OTHER' => (object)['status' => 'RESOLVED', 'disputed_transactions' => [(object)['seller_transaction_id' => 'CAPTURE2']]],
+		];
+		$provider = $this->providerWithCapture('COMPLETED', $disputes);
+
+		foreach ([
+			['event_type' => 'PAYMENT.CAPTURE.COMPLETED', 'resource' => ['id' => 'CAPTURE1']],
+			['event_type' => 'CUSTOMER.DISPUTE.UPDATED', 'resource' => ['dispute_id' => 'OPEN']],
+			['event_type' => 'CUSTOMER.DISPUTE.RESOLVED', 'resource' => ['dispute_id' => 'OTHER']],
+		] as $payload) {
+			$event = $provider->parseWebhook($this->payment(Status::Disputed), $this->webhook($payload));
+
+			$this->assertSame([Status::Disputed, false], [$event->status, $event->disputeWon], $payload['event_type']);
+		}
 	}
 
 	/**
