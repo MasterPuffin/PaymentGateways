@@ -61,6 +61,18 @@ class PaymentGateway {
 	}
 
 	/**
+	 * Current state of a stored payment at the provider, read only: no capture, nothing is changed. Use it to settle a
+	 * pending payment without webhooks or to check a payment by hand. Refunds and disputes are reported like
+	 * {@see parseWebhook()} does.
+	 *
+	 * @throws InvalidOptionsException|GatewayException
+	 */
+	public function fetchStatus(Payment $payment): WebhookEvent {
+		if (empty($payment->getProviderId()) && !$this->providerClass instanceof Offline) throw new InvalidOptionsException("providerId is required");
+		return $this->providerClass->fetchStatus($payment);
+	}
+
+	/**
 	 * @throws InvalidOptionsException
 	 */
 	public function cancel(Payment $payment): void {

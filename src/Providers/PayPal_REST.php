@@ -114,6 +114,23 @@ class PayPal_REST extends Base implements ProviderInterface {
 	}
 
 	/**
+	 * Reads the current state of a captured payment (the provider id is the capture id, see {@see execute()}) without
+	 * changing anything. A PENDING capture (e.g. eCheck, payment review) becomes Succeeded or Failed later.
+	 * The capture stays COMPLETED while it is disputed and the API used here names no dispute: a payment stored as
+	 * Disputed stays Disputed, only the dispute's webhook ends it. The sum of the refunds is known only for a complete
+	 * refund (the payment's amount); for a partial refund it is null.
+	 *
+	 * @throws GatewayException
+	 */
+	public function fetchStatus(Payment $payment): WebhookEvent {
+		$status = $this->_mapToStatus((string)$this->_getCapture($payment->getProviderId())->getStatus());
+		if ($status === Status::Succeeded && $payment->getStatus() === Status::Disputed) {
+			return new WebhookEvent(Status::Disputed);
+		}
+		return new WebhookEvent($status, refundedTotal: $status === Status::Refunded ? $payment->getAmount() : null);
+	}
+
+	/**
 	 * Cancel (void) an authorized payment before capture.
 	 * @throws GatewayException
 	 */

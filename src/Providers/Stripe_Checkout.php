@@ -70,6 +70,8 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	/**
 	 * Settles the payment: resolves a Checkout session to its payment intent (the payment's provider id changes) and
 	 * captures an authorized payment. A session the customer has not completed yet is Open, an expired one Cancelled.
+	 * A payment that was refunded or disputed meanwhile is reported as such ({@see fetchStatus()}): a payment intent
+	 * stays `succeeded` after a refund. Call {@see fetchStatus()} for the refunded total and the dispute.
 	 *
 	 * @throws GatewayException
 	 */
@@ -81,11 +83,7 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 			$payment->setStatus($sessionStatus);
 			return $sessionStatus;
 		}
-		try {
-			$paymentIntent = PaymentIntent::retrieve($payment->getProviderId());
-		} catch (Throwable $e) {
-			throw new GatewayException($e->getMessage());
-		}
+		$paymentIntent = $this->_retrievePaymentIntent($payment->getProviderId());
 
 		if ($paymentIntent->status === 'requires_capture') {
 			try {
@@ -98,8 +96,73 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 		}
 
 		$payment->setAmount($this->_fromMinorUnits($paymentIntent->amount, $paymentIntent->currency));
-		$payment->setStatus($this->_mapStatus($paymentIntent->status));
+		$payment->setStatus($this->_eventFromPaymentIntent($payment, $paymentIntent)->status);
 		return $payment->getStatus();
+	}
+
+	/**
+	 * Reads the current state of the payment from Stripe without changing anything (no capture, the session is not
+	 * expired). The provider id of a completed Checkout session changes to its payment intent; a session without
+	 * payment intent is Open, or Cancelled once expired.
+	 *
+	 * A payment intent stays `succeeded` after refunds and chargebacks, so the charge decides:
+	 *  - refunded: Refunded or PartiallyRefunded with the sum of all refunds;
+	 *  - an open or lost dispute (not an inquiry): Disputed with the disputed amount and the dispute id;
+	 *  - a dispute closed in favour of the seller ends a dispute the payment is stored with ({@see WebhookEvent::$disputeWon}),
+	 *    or one whose funds came back (`won`); a closed inquiry of an undisputed payment moved no money and is Succeeded.
+	 *
+	 * @throws GatewayException
+	 */
+	public function fetchStatus(Payment $payment): WebhookEvent {
+		Stripe::setApiKey($this->credentials['secret_key']);
+
+		$sessionStatus = $this->_resolveSession($payment);
+		if (!is_null($sessionStatus)) {
+			return new WebhookEvent($sessionStatus);
+		}
+		return $this->_eventFromPaymentIntent($payment, $this->_retrievePaymentIntent($payment->getProviderId()));
+	}
+
+	/**
+	 * The payment intent with its latest charge and the charge's dispute. Protected, so tests can answer without Stripe.
+	 *
+	 * @throws GatewayException
+	 */
+	protected function _retrievePaymentIntent(string $id): PaymentIntent {
+		try {
+			return PaymentIntent::retrieve(['id' => $id, 'expand' => ['latest_charge.dispute']]);
+		} catch (Throwable $e) {
+			throw new GatewayException($e->getMessage());
+		}
+	}
+
+	/**
+	 * State of a payment intent including refunds and the dispute of its charge, see {@see fetchStatus()}.
+	 */
+	private function _eventFromPaymentIntent(Payment $payment, PaymentIntent $paymentIntent): WebhookEvent {
+		$status = $this->_mapStatus((string)$paymentIntent->status);
+		$charge = is_object($paymentIntent->latest_charge ?? null) ? $paymentIntent->latest_charge : null;
+		if ($status !== Status::Succeeded || is_null($charge)) {
+			return new WebhookEvent($status);
+		}
+		$currency = (string)($charge->currency ?? $paymentIntent->currency);
+
+		$dispute = is_object($charge->dispute ?? null) ? $charge->dispute : null;
+		if (!is_null($dispute) && !self::_isInquiry($dispute) && !in_array($dispute->status ?? null, self::DISPUTE_WON, true)) {
+			return new WebhookEvent(Status::Disputed, disputedAmount: $this->_fromMinorUnits((int)$dispute->amount, $currency), disputeId: $dispute->id);
+		}
+		$won = !is_null($dispute) && in_array($dispute->status ?? null, self::DISPUTE_WON, true)
+			&& ($payment->getStatus() === Status::Disputed || $dispute->status === 'won');
+
+		$refundedTotal = $this->_fromMinorUnits((int)($charge->amount_refunded ?? 0), $currency);
+		if ($refundedTotal > 0) {
+			//A refund after a won dispute: the refund is the newer state, the caller books the dispute's end on its own report
+			return new WebhookEvent(($charge->refunded ?? false) ? Status::Refunded : Status::PartiallyRefunded, refundedTotal: $refundedTotal);
+		}
+		if ($won) {
+			return new WebhookEvent(Status::Succeeded, disputedAmount: $dispute->status === 'won' ? $this->_fromMinorUnits((int)$dispute->amount, $currency) : null, disputeWon: true, disputeId: $dispute->id);
+		}
+		return new WebhookEvent(Status::Succeeded);
 	}
 
 	/**

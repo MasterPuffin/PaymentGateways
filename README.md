@@ -108,7 +108,14 @@ Subscribe to `charge.dispute.created`, `charge.dispute.updated`, `charge.dispute
 
 `Status::supersedes()` tells whether a reported status is outdated, webhooks arrive in any order.
 `execute()` returns `Open` for a Stripe Checkout session the customer has not completed and `Cancelled` for an expired
-one; `cancel()` expires an open session.
+one; `cancel()` expires an open session. A Stripe payment that was refunded or disputed meanwhile is returned as such
+(the payment intent stays `succeeded` after a refund).
+
+## Without webhooks
+`fetchStatus($payment)` reads the current state of a stored payment and returns a `WebhookEvent` like `parseWebhook()`,
+without changing anything (no capture). Use it to settle pending payments (Stripe SEPA, PayPal eCheck) on a schedule or
+when staff check a payment by hand. Stripe reports refunds with their sum and the dispute of the charge; PayPal reports
+the capture's status (the refund sum only for a complete refund, a disputed payment stays `Disputed`).
 
 ## Tests
 Every provider behaviour is tested against the real test APIs (`tests/StripeTest.php`, `tests/PayPalTest.php`, base

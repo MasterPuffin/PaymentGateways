@@ -9,6 +9,12 @@ interface ProviderInterface {
 
 	public function execute(Payment $payment): Status;
 
+	/**
+	 * Reads the current state of the payment from the provider without changing it (no capture), e.g. to settle a
+	 * pending payment without webhooks. Reports refunds and disputes like {@see parseWebhook()}.
+	 */
+	public function fetchStatus(Payment $payment): WebhookEvent;
+
 	public function cancel(Payment $payment): void;
 
 	public function refund(Payment $payment, ?float $amount = null): void;

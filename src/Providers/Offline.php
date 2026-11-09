@@ -20,6 +20,13 @@ class Offline extends Base implements ProviderInterface {
 		return Status::Pending;
 	}
 
+	/**
+	 * Nobody to ask: the stored status stays.
+	 */
+	public function fetchStatus(Payment $payment): WebhookEvent {
+		return new WebhookEvent($payment->getStatus());
+	}
+
 	public function cancel(Payment $payment): void {
 		$payment->setStatus(Status::Cancelled);
 	}

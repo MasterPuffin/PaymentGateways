@@ -110,6 +110,72 @@ class StripeOfflineTest extends TestCase {
 	}
 
 	/**
+	 * A succeeded payment intent with its charge.
+	 */
+	private function paymentIntent(array $charge = [], string $status = 'succeeded'): array {
+		return ['id' => 'pi_123', 'object' => 'payment_intent', 'status' => $status, 'amount' => 10000, 'currency' => 'eur',
+			'latest_charge' => $charge + ['id' => 'ch_1', 'object' => 'charge', 'currency' => 'eur', 'amount' => 10000, 'amount_refunded' => 0, 'refunded' => false, 'dispute' => null]];
+	}
+
+	private function storedPayment(Status $status = Status::Pending): Payment {
+		$payment = new Payment();
+		$payment->setProviderId('pi_123');
+		$payment->setCurrencyCode('EUR');
+		$payment->setAmount(100.0);
+		$payment->setStatus($status);
+		return $payment;
+	}
+
+	/**
+	 * Fetches the state of payments whose payment intent is `succeeded`: untouched, refunded completely, refunded in part.
+	 * Why: Stripe leaves the payment intent `succeeded` after a refund. Read from the payment intent alone, refunded
+	 * payments that were never booked were booked as income without their refunds.
+	 */
+	public function testFetchingAPaymentReportsItsRefunds(): void {
+		$untouched = (new FakeStripe(['pi_123' => $this->paymentIntent()]))->fetchStatus($this->storedPayment());
+		$refunded = (new FakeStripe(['pi_123' => $this->paymentIntent(['amount_refunded' => 10000, 'refunded' => true])]))->fetchStatus($this->storedPayment());
+		$partially = (new FakeStripe(['pi_123' => $this->paymentIntent(['amount_refunded' => 6000])]))->fetchStatus($this->storedPayment());
+
+		$this->assertSame([Status::Succeeded, null], [$untouched->status, $untouched->refundedTotal]);
+		$this->assertSame([Status::Refunded, 100.0], [$refunded->status, $refunded->refundedTotal]);
+		$this->assertSame([Status::PartiallyRefunded, 60.0], [$partially->status, $partially->refundedTotal]);
+	}
+
+	/**
+	 * Fetches a payment that is still processing (SEPA) and settles one that was refunded meanwhile with `execute()`.
+	 * Why: Pending payments are checked without webhooks; a processing payment must stay pending. `execute()` settles
+	 * old Checkout sessions and must not report a refunded payment as succeeded either.
+	 */
+	public function testAProcessingPaymentStaysPendingAndExecuteSeesRefunds(): void {
+		$processing = (new FakeStripe(['pi_123' => $this->paymentIntent(status: 'processing')]))->fetchStatus($this->storedPayment());
+		$payment = $this->storedPayment(Status::Open);
+		$executed = (new FakeStripe(['pi_123' => $this->paymentIntent(['amount_refunded' => 10000, 'refunded' => true])]))->execute($payment);
+
+		$this->assertSame(Status::Pending, $processing->status);
+		$this->assertSame([Status::Refunded, Status::Refunded], [$executed, $payment->getStatus()]);
+	}
+
+	/**
+	 * Fetches payments with an open chargeback, an inquiry, a won dispute of a disputed payment and a closed inquiry of
+	 * an undisputed one.
+	 * Why: Same meaning as the dispute webhooks: a chargeback withdraws the money, an inquiry doesn't, and only a dispute
+	 * decided for the seller ends a chargeback. A closed inquiry moved no money and must not be booked as dispute.
+	 */
+	public function testFetchingAPaymentReportsItsDispute(): void {
+		$dispute = fn(string $status) => ['dispute' => ['id' => 'dp_1', 'object' => 'dispute', 'amount' => 4000, 'currency' => 'eur', 'status' => $status]];
+
+		$open = (new FakeStripe(['pi_123' => $this->paymentIntent($dispute('needs_response'))]))->fetchStatus($this->storedPayment(Status::Succeeded));
+		$inquiry = (new FakeStripe(['pi_123' => $this->paymentIntent($dispute('warning_needs_response'))]))->fetchStatus($this->storedPayment(Status::Succeeded));
+		$won = (new FakeStripe(['pi_123' => $this->paymentIntent($dispute('won'))]))->fetchStatus($this->storedPayment(Status::Disputed));
+		$closedInquiry = (new FakeStripe(['pi_123' => $this->paymentIntent($dispute('warning_closed'))]))->fetchStatus($this->storedPayment(Status::Succeeded));
+
+		$this->assertSame([Status::Disputed, 40.0, 'dp_1'], [$open->status, $open->disputedAmount, $open->disputeId]);
+		$this->assertSame([Status::Succeeded, false], [$inquiry->status, $inquiry->disputeWon]);
+		$this->assertSame([Status::Succeeded, true, 40.0, 'dp_1'], [$won->status, $won->disputeWon, $won->disputedAmount, $won->disputeId]);
+		$this->assertSame([Status::Succeeded, false], [$closedInquiry->status, $closedInquiry->disputeWon]);
+	}
+
+	/**
 	 * A signed event as Stripe sends it.
 	 */
 	private function event(string $type, array $object): RequestInterface {

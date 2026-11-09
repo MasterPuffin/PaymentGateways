@@ -96,6 +96,23 @@ class PayPalOfflineTest extends TestCase {
 	}
 
 	/**
+	 * Fetches the state of a pending capture, a completed one, a completed one of a disputed payment and a refunded one.
+	 * Why: Pending payments (eCheck, review) are checked without webhooks. The capture stays COMPLETED while disputed, so
+	 * a disputed payment must stay disputed; a complete refund is the payment's amount.
+	 */
+	public function testFetchingACaptureReportsItsState(): void {
+		$pending = $this->providerWithCapture('PENDING')->fetchStatus($this->payment(Status::Pending));
+		$completed = $this->providerWithCapture('COMPLETED')->fetchStatus($this->payment(Status::Pending));
+		$disputed = $this->providerWithCapture('COMPLETED')->fetchStatus($this->payment(Status::Disputed));
+		$refunded = $this->providerWithCapture('REFUNDED')->fetchStatus($this->payment());
+
+		$this->assertSame(Status::Pending, $pending->status);
+		$this->assertSame(Status::Succeeded, $completed->status);
+		$this->assertSame(Status::Disputed, $disputed->status);
+		$this->assertSame([Status::Refunded, 10.0], [$refunded->status, $refunded->refundedTotal]);
+	}
+
+	/**
 	 * Reads the ids of a body without resource.
 	 * Why: The endpoint is public, any body can arrive and must simply find no payment.
 	 */
