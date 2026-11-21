@@ -6,6 +6,7 @@ use Exception;
 use MasterPuffin\PaymentGateways\Exceptions\GatewayException;
 use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\Status;
+use MasterPuffin\PaymentGateways\WebhookEvent;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use PaypalServerSdkLib\Controllers\OrdersController;
 use PaypalServerSdkLib\Controllers\PaymentsController;
@@ -58,6 +59,7 @@ class PayPalOfflineTest extends TestCase {
 		$capture->setId($id);
 		$capture->setStatus($status);
 		$capture->setAmount(new Money('EUR', $amount));
+		$capture->setUpdateTime('2026-11-10T19:53:00Z');
 		return $capture;
 	}
 
@@ -110,6 +112,21 @@ class PayPalOfflineTest extends TestCase {
 		$this->assertSame(Status::Succeeded, $completed->status);
 		$this->assertSame(Status::Disputed, $disputed->status);
 		$this->assertSame([Status::Refunded, 10.0], [$refunded->status, $refunded->refundedTotal]);
+	}
+
+	/**
+	 * Fetches a pending, a declined and a completed capture.
+	 * Why: Without webhooks a failure is noticed at the next check; it must carry the time PayPal changed the capture,
+	 * not the time of the check. The time of a settled capture would be a guess (it changes with refunds).
+	 */
+	public function testAFailedOrPendingCaptureCarriesItsTime(): void {
+		$pending = $this->providerWithCapture('PENDING')->fetchStatus($this->payment(Status::Pending));
+		$declined = $this->providerWithCapture('DECLINED')->fetchStatus($this->payment(Status::Pending));
+		$completed = $this->providerWithCapture('COMPLETED')->fetchStatus($this->payment(Status::Pending));
+
+		$this->assertSame([Status::Pending, 1794340380, null], [$pending->status, $pending->occurredAt, $pending->failureReason]);
+		$this->assertSame([Status::Failed, 1794340380, WebhookEvent::REASON_DECLINED], [$declined->status, $declined->occurredAt, $declined->failureReason]);
+		$this->assertNull($completed->occurredAt);
 	}
 
 	/**

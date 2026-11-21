@@ -6,6 +6,7 @@ use MasterPuffin\PaymentGateways\Payment;
 use MasterPuffin\PaymentGateways\PaymentGateway;
 use MasterPuffin\PaymentGateways\Provider;
 use MasterPuffin\PaymentGateways\Status;
+use MasterPuffin\PaymentGateways\WebhookEvent;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\RequestInterface;
@@ -176,10 +177,47 @@ class StripeOfflineTest extends TestCase {
 	}
 
 	/**
+	 * Fetches a payment whose card Stripe blocked (waiting for another payment method), the same payment once Stripe
+	 * cancelled it a day later, a payment declined by the bank and one still processing.
+	 * Why: Without webhooks the caller learns of a failure only at its next check, maybe a day later. Dated by the check,
+	 * a blocked first attempt would appear after the customer's successful second one. The failed charge decides time
+	 * and reason, not the automatic cancellation.
+	 */
+	public function testAPaymentWithoutMoneyCarriesTheTimeAndReasonOfItsFailure(): void {
+		$failedCharge = fn(string $outcome) => ['status' => 'failed', 'created' => 1000, 'outcome' => ['type' => $outcome]];
+		$intent = fn(array $charge, string $status, array $more = []) => ['created' => 900, 'latest_charge' => $charge + $this->paymentIntent()['latest_charge']] + $more + $this->paymentIntent(status: $status);
+
+		$blocked = (new FakeStripe(['pi_123' => $intent($failedCharge('blocked'), 'requires_payment_method')]))->fetchStatus($this->storedPayment());
+		$cancelled = (new FakeStripe(['pi_123' => $intent($failedCharge('blocked'), 'canceled', ['canceled_at' => 5000])]))->fetchStatus($this->storedPayment());
+		$declined = (new FakeStripe(['pi_123' => $intent($failedCharge('issuer_declined'), 'requires_payment_method')]))->fetchStatus($this->storedPayment());
+		$abandoned = (new FakeStripe(['pi_123' => $intent(['status' => 'pending', 'created' => 1200], 'canceled', ['canceled_at' => 5000])]))->fetchStatus($this->storedPayment());
+
+		$this->assertSame([Status::Pending, 1000, WebhookEvent::REASON_BLOCKED], [$blocked->status, $blocked->occurredAt, $blocked->failureReason]);
+		$this->assertSame([Status::Failed, 1000, WebhookEvent::REASON_BLOCKED], [$cancelled->status, $cancelled->occurredAt, $cancelled->failureReason]);
+		$this->assertSame([Status::Pending, 1000, WebhookEvent::REASON_DECLINED], [$declined->status, $declined->occurredAt, $declined->failureReason]);
+		$this->assertSame([Status::Failed, 5000, null], [$abandoned->status, $abandoned->occurredAt, $abandoned->failureReason]);
+	}
+
+	/**
+	 * Fetches a settled payment and parses a webhook.
+	 * Why: Only payments without money movement are dated by a check, the time of a settled one would be a guess. A
+	 * webhook is dated by its event, not by its delivery, which may be retried for days.
+	 */
+	public function testSettledPaymentsHaveNoTimeAndWebhooksTheTimeOfTheirEvent(): void {
+		$gateway = new PaymentGateway(Provider::Stripe_Checkout, ['secret_key' => 'sk_test', 'webhook_secret' => self::SECRET]);
+
+		$settled = (new FakeStripe(['pi_123' => $this->paymentIntent()]))->fetchStatus($this->storedPayment());
+		$webhook = $gateway->parseWebhook($this->storedPayment(), $this->event('payment_intent.canceled', ['id' => 'pi_123', 'object' => 'payment_intent', 'status' => 'canceled'], 4242));
+
+		$this->assertNull($settled->occurredAt);
+		$this->assertSame([Status::Failed, 4242], [$webhook->status, $webhook->occurredAt]);
+	}
+
+	/**
 	 * A signed event as Stripe sends it.
 	 */
-	private function event(string $type, array $object): RequestInterface {
-		$body = json_encode(['id' => 'evt_' . bin2hex(random_bytes(4)), 'object' => 'event', 'type' => $type, 'data' => ['object' => $object]]);
+	private function event(string $type, array $object, ?int $created = null): RequestInterface {
+		$body = json_encode(['id' => 'evt_' . bin2hex(random_bytes(4)), 'object' => 'event', 'type' => $type, 'created' => $created ?? time(), 'data' => ['object' => $object]]);
 		$time = time();
 		$factory = new Psr17Factory();
 		return $factory->createRequest('POST', 'https://example.com/webhook')

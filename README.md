@@ -110,6 +110,17 @@ when Stripe updates the same dispute to `needs_response` (`charge.dispute.update
 Subscribe to `charge.dispute.created`, `charge.dispute.updated`, `charge.dispute.funds_withdrawn` and
 `charge.dispute.closed`.
 
+### Time and reason of a status
+`$event->occurredAt` is the Unix time the reported status came about at the provider, null if unknown: the time of the
+event for webhooks; for `fetchStatus()` the time of the failed charge, the cancellation or the expired Checkout session
+(Stripe) or of the last change of a pending or declined capture (PayPal), only for payments without money movement
+(`Pending`, `Authorized`, `Failed`, `Cancelled`). Store it with the status: without webhooks a failure may only be noticed
+a day later, and dated by your check it would appear after things that happened before it.
+`$event->failureReason` tells why the latest attempt to pay failed: `WebhookEvent::REASON_BLOCKED` (the provider refused
+it as too risky, e.g. Stripe Radar) or `WebhookEvent::REASON_DECLINED` (bank or card issuer); null otherwise or if unknown
+(webhooks don't name it). A Stripe payment whose card failed waits for another payment method (`Pending`) and is cancelled
+a day later (`Failed`); both report the time and reason of the failed charge.
+
 `Status::supersedes()` tells whether a reported status is outdated, webhooks arrive in any order.
 `execute()` returns `Open` for a Stripe Checkout session the customer has not completed and `Cancelled` for an expired
 one; `cancel()` expires an open session. A Stripe payment that was refunded or disputed meanwhile is returned as such

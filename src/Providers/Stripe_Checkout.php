@@ -107,10 +107,10 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	public function execute(Payment $payment): Status {
 		Stripe::setApiKey($this->credentials['secret_key']);
 
-		$sessionStatus = $this->_resolveSession($payment);
-		if (!is_null($sessionStatus)) {
-			$payment->setStatus($sessionStatus);
-			return $sessionStatus;
+		$sessionEvent = $this->_resolveSession($payment);
+		if (!is_null($sessionEvent)) {
+			$payment->setStatus($sessionEvent->status);
+			return $sessionEvent->status;
 		}
 		$paymentIntent = $this->_retrievePaymentIntent($payment->getProviderId());
 
@@ -145,9 +145,9 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	public function fetchStatus(Payment $payment): WebhookEvent {
 		Stripe::setApiKey($this->credentials['secret_key']);
 
-		$sessionStatus = $this->_resolveSession($payment);
-		if (!is_null($sessionStatus)) {
-			return new WebhookEvent($sessionStatus);
+		$sessionEvent = $this->_resolveSession($payment);
+		if (!is_null($sessionEvent)) {
+			return $sessionEvent;
 		}
 		return $this->_eventFromPaymentIntent($payment, $this->_retrievePaymentIntent($payment->getProviderId()));
 	}
@@ -171,7 +171,10 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	private function _eventFromPaymentIntent(Payment $payment, PaymentIntent $paymentIntent): WebhookEvent {
 		$status = $this->_mapStatus((string)$paymentIntent->status);
 		$charge = is_object($paymentIntent->latest_charge ?? null) ? $paymentIntent->latest_charge : null;
-		if ($status !== Status::Succeeded || is_null($charge)) {
+		if ($status !== Status::Succeeded) {
+			return $this->_eventWithoutMoney($status, $paymentIntent, $charge);
+		}
+		if (is_null($charge)) {
 			return new WebhookEvent($status);
 		}
 		$currency = (string)($charge->currency ?? $paymentIntent->currency);
@@ -192,6 +195,27 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 			return new WebhookEvent(Status::Succeeded, disputedAmount: $dispute->status === 'won' ? $this->_fromMinorUnits((int)$dispute->amount, $currency) : null, disputeWon: true, disputeId: $dispute->id);
 		}
 		return new WebhookEvent(Status::Succeeded);
+	}
+
+	/**
+	 * A payment intent that moved no money (Pending, Authorized, Failed), with the time its state came about and why its
+	 * latest charge failed ({@see WebhookEvent::$occurredAt}, {@see WebhookEvent::$failureReason}):
+	 *  - a failed charge decides both: a blocked or declined card leaves the payment intent waiting for another payment
+	 *    method (Pending), and it is cancelled automatically a day later (Failed); the payment failed with the charge;
+	 *  - otherwise the latest charge (processing, authorized), the cancellation, or the creation of the payment intent.
+	 */
+	private function _eventWithoutMoney(Status $status, PaymentIntent $paymentIntent, ?object $charge): WebhookEvent {
+		$failed = ($charge->status ?? null) === 'failed';
+		$occurredAt = match (true) {
+			$failed, $status !== Status::Failed && is_int($charge->created ?? null) => $charge->created,
+			$status === Status::Failed && is_int($paymentIntent->canceled_at ?? null) => $paymentIntent->canceled_at,
+			default => is_int($paymentIntent->created ?? null) ? $paymentIntent->created : null,
+		};
+		$reason = null;
+		if ($failed) {
+			$reason = ($charge->outcome->type ?? null) === 'blocked' ? WebhookEvent::REASON_BLOCKED : WebhookEvent::REASON_DECLINED;
+		}
+		return new WebhookEvent($status, occurredAt: $occurredAt, failureReason: $reason);
 	}
 
 	/**
@@ -320,6 +344,13 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	public function parseWebhook(Payment $payment, RequestInterface $request): WebhookEvent {
 		$status = $this->getStatusFromWebhook($payment, $request);
 		$event = json_decode($this->_getWebhookBody($request));
+		return $this->_parseVerifiedWebhook($payment, $status, $event)->withOccurrence(is_int($event->created ?? null) ? $event->created : null);
+	}
+
+	/**
+	 * {@see parseWebhook()} of the verified event, without its time.
+	 */
+	private function _parseVerifiedWebhook(Payment $payment, Status $status, object $event): WebhookEvent {
 		$object = $event->data->object ?? null;
 		$currency = (string)($object->currency ?? $payment->getCurrencyCode());
 		$amount = fn(string $field) => is_numeric($object->$field ?? null) ? $this->_fromMinorUnits($object->$field, $currency) : null;
@@ -424,12 +455,12 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 	}
 
 	/**
-	 * Replaces a Checkout session id with the id of its payment intent. Returns the status of a session that has none
-	 * (Open, or Cancelled once expired), null once the payment intent is the provider id.
+	 * Replaces a Checkout session id with the id of its payment intent. Reports a session that has none: Open, or
+	 * Cancelled once expired (with the time it expired); null once the payment intent is the provider id.
 	 *
 	 * @throws GatewayException
 	 */
-	private function _resolveSession(Payment $payment): ?Status {
+	private function _resolveSession(Payment $payment): ?WebhookEvent {
 		if (!str_starts_with((string)$payment->getProviderId(), 'cs_')) {
 			return null;
 		}
@@ -439,7 +470,9 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 			throw new GatewayException($e->getMessage());
 		}
 		if (empty($session->payment_intent)) {
-			return $session->status === 'expired' ? Status::Cancelled : Status::Open;
+			return $session->status === 'expired'
+				? new WebhookEvent(Status::Cancelled, occurredAt: is_int($session->expires_at ?? null) ? $session->expires_at : null)
+				: new WebhookEvent(Status::Open);
 		}
 		$payment->setProviderId(is_string($session->payment_intent) ? $session->payment_intent : $session->payment_intent->id);
 		return null;

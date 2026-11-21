@@ -118,14 +118,21 @@ class PayPal_REST extends Base implements ProviderInterface {
 	 * changing anything. A PENDING capture (e.g. eCheck, payment review) becomes Succeeded or Failed later.
 	 * The capture stays COMPLETED while it is disputed and the API used here names no dispute: a payment stored as
 	 * Disputed stays Disputed, only the dispute's webhook ends it. The sum of the refunds is known only for a complete
-	 * refund (the payment's amount); for a partial refund it is null.
+	 * refund (the payment's amount); for a partial refund it is null. A pending or failed capture carries the time of its
+	 * last change ({@see WebhookEvent::$occurredAt}), a failed one counts as declined.
 	 *
 	 * @throws GatewayException
 	 */
 	public function fetchStatus(Payment $payment): WebhookEvent {
-		$status = $this->_mapToStatus((string)$this->_getCapture($payment->getProviderId())->getStatus());
+		$capture = $this->_getCapture($payment->getProviderId());
+		$status = $this->_mapToStatus((string)$capture->getStatus());
 		if ($status === Status::Succeeded && $payment->getStatus() === Status::Disputed) {
 			return new WebhookEvent(Status::Disputed);
+		}
+		if (in_array($status, [Status::Pending, Status::Failed], true)) {
+			$updated = strtotime((string)$capture->getUpdateTime());
+			return new WebhookEvent($status, occurredAt: $updated === false ? null : $updated,
+				failureReason: $status === Status::Failed ? WebhookEvent::REASON_DECLINED : null);
 		}
 		return new WebhookEvent($status, refundedTotal: $status === Status::Refunded ? $payment->getAmount() : null);
 	}
@@ -201,12 +208,15 @@ class PayPal_REST extends Base implements ProviderInterface {
 	public function parseWebhook(Payment $payment, RequestInterface $request): WebhookEvent {
 		[$status, $dispute, $won] = $this->_evaluateWebhook($payment, $request);
 		$amount = $dispute->dispute_amount->value ?? null;
+		//The time of the event; the payload is unsigned, but it only dates what the API confirmed and can't lie ahead
+		$created = strtotime((string)(json_decode($this->_getWebhookBody($request))->create_time ?? ''));
 		return new WebhookEvent(
 			$status,
 			refundedTotal: $this->_getRefundedTotal($payment, $request),
 			disputedAmount: !is_null($dispute) && is_numeric($amount) ? (float)$amount : null,
 			disputeWon: $won && $status === Status::Succeeded,
 			disputeId: is_string($dispute->dispute_id ?? null) ? $dispute->dispute_id : null,
+			occurredAt: $created === false ? null : min($created, time()),
 		);
 	}
 
