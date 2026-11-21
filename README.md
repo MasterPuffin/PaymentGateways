@@ -1,4 +1,4 @@
-nau# Payment Gateways
+# Payment Gateways
 Integrate payments with just a few lines of code.
 
 ## Why does this exist?
