@@ -11,6 +11,7 @@ use MasterPuffin\PaymentGateways\WebhookEvent;
 use Psr\Http\Message\RequestInterface;
 use Stripe\Charge;
 use Stripe\Checkout\Session;
+use Stripe\Customer;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\PaymentIntent;
 use Stripe\Refund;
@@ -42,7 +43,6 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 		]];
 
 		$options = [
-			'customer_email' => $payment->getCustomer()->getEmail(),
 			'line_items' => $line_items,
 			'mode' => 'payment',
 			'success_url' => $this->successUrl,
@@ -52,6 +52,10 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 				'metadata' => $payment->getMetadata(),
 			]
 		];
+		$customer = $this->_createCustomer($payment);
+		if (!is_null($customer)) {
+			$options['customer'] = $customer;
+		}
 		//Called allowed_payment_method_types since API version 2026-09-30.endive (stripe-php 22)
 		if (!empty(($this->options['payment_method_types']))) {
 			$options['allowed_payment_method_types'] = $this->options['payment_method_types'];
@@ -65,6 +69,31 @@ class Stripe_Checkout extends Base implements ProviderInterface {
 
 		$payment->setProviderId($session->id);
 		return $session->url;
+	}
+
+	/**
+	 * Creates a Stripe customer with the name and e-mail address of the payment's customer, so the dashboard shows them
+	 * for every payment method. Without a customer, Stripe only shows what the payment method collected: cards bring
+	 * the cardholder's name and e-mail address, Klarna and SEPA Direct Debit (while pending) nothing.
+	 * A new customer is created per payment, a returning buyer appears more than once.
+	 *
+	 * @return string|null Id of the customer, null without e-mail address (Checkout then asks for it)
+	 * @throws GatewayException
+	 */
+	private function _createCustomer(Payment $payment): ?string {
+		$email = $payment->getCustomer()->getEmail();
+		if ($email === '') {
+			return null;
+		}
+		$data = ['email' => $email];
+		if ($payment->getCustomer()->getName() !== '') {
+			$data['name'] = $payment->getCustomer()->getName();
+		}
+		try {
+			return Customer::create($data)->id;
+		} catch (Throwable $e) {
+			throw new GatewayException($e->getMessage());
+		}
 	}
 
 	/**

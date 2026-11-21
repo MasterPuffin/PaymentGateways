@@ -36,6 +36,23 @@ class StripeTest extends NetworkTestCase {
 	}
 
 	/**
+	 * Creates a Checkout session for a payment with name and e-mail address and reads its customer.
+	 * Why: Without a customer the Stripe dashboard shows no name and e-mail address for payment methods that don't
+	 * collect them (Klarna, pending SEPA Direct Debit), the seller can't tell whose payment it is.
+	 */
+	public function testTheSessionCarriesTheCustomersNameAndEmail(): void {
+		$gateway = $this->stripe();
+		$payment = $this->payment();
+		$payment->getCustomer()->setName('Network Test');
+
+		$gateway->create($payment);
+
+		$customer = Customer::retrieve(Session::retrieve($payment->getProviderId())->customer);
+		$this->assertSame(['Network Test', 'network-test@example.com'], [$customer->name, $customer->email]);
+		$gateway->cancel($payment);
+	}
+
+	/**
 	 * Expires a session, settles it, expires it again and parses the real `checkout.session.expired` event.
 	 * Why: An aborted booking is only deletable once its session can no longer be paid, and a retry must not fail. The
 	 * event must name the session, the only id such a payment is stored with.

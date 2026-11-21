@@ -45,6 +45,10 @@ Now create the gateway for the payment. This will return the redirection url to 
 ```
 $redirectUrl = $gateway->create($payment);
 ```
+Stripe Checkout creates a Stripe customer with the customer's name and e-mail address for every payment that has an
+e-mail address, so the dashboard shows them for every payment method (Klarna and SEPA Direct Debit collect none
+themselves). A returning buyer gets a new customer each time.
+
 Also save the payment somewhere, for example to a database. Creating the gateway also updated the providerId of the payment which will be needed later to verify the payment.
 Then redirect to the redirectUrl.
 
