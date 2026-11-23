@@ -297,6 +297,61 @@ class PayPalOfflineTest extends TestCase {
 	}
 
 	/**
+	 * A provider whose API reports the order with this status, with a capture for a completed order.
+	 */
+	private function providerWithOrder(string $status): FakePayPal {
+		$order = new Order();
+		$order->setStatus($status);
+		$payments = new PaymentCollection();
+		$payments->setCaptures([$this->capture('COMPLETED', 'CAPTURE7', '12.34')]);
+		$unit = $this->createStub(PurchaseUnit::class);
+		$unit->method('getPayments')->willReturn($payments);
+		$order->setPurchaseUnits([$unit]);
+		$orders = $this->createStub(OrdersController::class);
+		$orders->method('getOrder')->willReturn($this->response($order));
+		return $this->provider(null, $orders);
+	}
+
+	/**
+	 * Fetches orders that were never executed: not approved, approved, voided and completed.
+	 * Why: A buyer who approves at PayPal and doesn't return is only noticed by fetching the order; an approved order must
+	 * be executed before it expires. A completed one is read from its capture, later calls refer to the capture.
+	 */
+	public function testFetchingAnOpenPaymentReadsItsOrder(): void {
+		$statuses = [];
+		foreach (['CREATED', 'PAYER_ACTION_REQUIRED', 'APPROVED', 'VOIDED'] as $orderStatus) {
+			$payment = $this->payment(Status::Open);
+			$payment->setProviderId('ORDER1');
+			$statuses[] = $this->providerWithOrder($orderStatus)->fetchStatus($payment)->status;
+			$this->assertSame('ORDER1', $payment->getProviderId());
+		}
+		$completed = $this->payment(Status::Open);
+		$completed->setProviderId('ORDER1');
+		$statuses[] = $this->providerWithOrder('COMPLETED')->fetchStatus($completed)->status;
+
+		$this->assertSame([Status::Open, Status::Open, Status::Authorized, Status::Cancelled, Status::Succeeded], $statuses);
+		$this->assertSame(['CAPTURE7', 12.34], [$completed->getProviderId(), $completed->getAmount()]);
+	}
+
+	/**
+	 * Fetches an order PayPal no longer knows, and one whose request fails otherwise.
+	 * Why: Expired orders are deleted at PayPal; asking about them must close the payment instead of failing every time.
+	 * Other errors must not be mistaken for an expired order.
+	 */
+	public function testAnUnknownOrderIsCancelled(): void {
+		$orders = $this->createStub(OrdersController::class);
+		$orders->method('getOrder')->willThrowException(new Exception('RESOURCE_NOT_FOUND'));
+		$payment = $this->payment(Status::Open);
+		$payment->setProviderId('ORDER1');
+		$this->assertSame(Status::Cancelled, $this->provider(null, $orders)->fetchStatus($payment)->status);
+
+		$failing = $this->createStub(OrdersController::class);
+		$failing->method('getOrder')->willThrowException(new Exception('Connection timed out'));
+		$this->expectException(GatewayException::class);
+		$this->provider(null, $failing)->fetchStatus($payment);
+	}
+
+	/**
 	 * Authorizes and captures an order the buyer approved.
 	 * Why: Approving needs a buyer in the browser. Later webhooks and refunds refer to the capture, so the provider id must
 	 * change from the order to the capture.

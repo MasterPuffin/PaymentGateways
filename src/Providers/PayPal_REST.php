@@ -20,6 +20,7 @@ use PaypalServerSdkLib\Models\Builders\PaypalWalletBuilder;
 use PaypalServerSdkLib\Models\Builders\PaypalWalletExperienceContextBuilder;
 use PaypalServerSdkLib\Models\Builders\PurchaseUnitRequestBuilder;
 use PaypalServerSdkLib\Models\Builders\RefundRequestBuilder;
+use PaypalServerSdkLib\Models\OrderStatus;
 use PaypalServerSdkLib\Models\CheckoutPaymentIntent;
 use PaypalServerSdkLib\Models\PaypalExperienceLandingPage;
 use PaypalServerSdkLib\Models\PaypalExperienceUserAction;
@@ -121,9 +122,14 @@ class PayPal_REST extends Base implements ProviderInterface {
 	 * refund (the payment's amount); for a partial refund it is null. A pending or failed capture carries the time of its
 	 * last change ({@see WebhookEvent::$occurredAt}), a failed one counts as declined.
 	 *
+	 * A payment that is still Open was not executed yet, its provider id is the order's ({@see self::_fetchOrderStatus()}).
+	 *
 	 * @throws GatewayException
 	 */
 	public function fetchStatus(Payment $payment): WebhookEvent {
+		if ($payment->getStatus() === Status::Open) {
+			return $this->_fetchOrderStatus($payment);
+		}
 		$capture = $this->_getCapture($payment->getProviderId());
 		$status = $this->_mapToStatus((string)$capture->getStatus());
 		if ($status === Status::Succeeded && $payment->getStatus() === Status::Disputed) {
@@ -135,6 +141,46 @@ class PayPal_REST extends Base implements ProviderInterface {
 				failureReason: $status === Status::Failed ? WebhookEvent::REASON_DECLINED : null);
 		}
 		return new WebhookEvent($status, refundedTotal: $status === Status::Refunded ? $payment->getAmount() : null);
+	}
+
+	/**
+	 * State of an order that was not executed yet, for buyers who approved it at PayPal but never came back:
+	 *  - not approved yet (CREATED, SAVED, PAYER_ACTION_REQUIRED): Open;
+	 *  - approved (APPROVED): Authorized, {@see execute()} takes the money. Nothing is reserved at PayPal before that,
+	 *    an approved order that is not executed expires (by default 3 hours after it was created) and costs nothing;
+	 *  - voided, or expired and no longer known to PayPal (RESOURCE_NOT_FOUND, INVALID_RESOURCE_ID): Cancelled;
+	 *  - completed (executed meanwhile): the state of its capture, the provider id changes to the capture like in
+	 *    {@see execute()}.
+	 *
+	 * @throws GatewayException The order could not be read, or it was authorized without being captured
+	 */
+	private function _fetchOrderStatus(Payment $payment): WebhookEvent {
+		try {
+			$order = $this->_call(fn(PaypalServerSdkClient $client) => $client->getOrdersController()->getOrder([
+				'id' => $payment->getProviderId(),
+			]));
+		} catch (GatewayException $e) {
+			if (in_array($e->getMessage(), ['RESOURCE_NOT_FOUND', 'INVALID_RESOURCE_ID'], true)) {
+				return new WebhookEvent(Status::Cancelled);
+			}
+			throw $e;
+		}
+		switch ((string)$order->getStatus()) {
+			case OrderStatus::APPROVED:
+				return new WebhookEvent(Status::Authorized);
+			case OrderStatus::VOIDED:
+				return new WebhookEvent(Status::Cancelled);
+			case OrderStatus::COMPLETED:
+				$capture = (($order->getPurchaseUnits()[0] ?? null)?->getPayments()?->getCaptures() ?? [])[0] ?? null;
+				if (is_null($capture) || !$capture->getId()) {
+					throw new GatewayException('Order ' . $payment->getProviderId() . ' was authorized but not captured');
+				}
+				$payment->setProviderId($capture->getId());
+				$payment->setAmount((float)$capture->getAmount()?->getValue());
+				return new WebhookEvent($this->_mapToStatus((string)$capture->getStatus()));
+			default:
+				return new WebhookEvent(Status::Open);
+		}
 	}
 
 	/**

@@ -131,6 +131,11 @@ one; `cancel()` expires an open session. A Stripe payment that was refunded or d
 without changing anything (no capture). Use it to settle pending payments (Stripe SEPA, PayPal eCheck) on a schedule or
 when staff check a payment by hand. Stripe reports refunds with their sum and the dispute of the charge; PayPal reports
 the capture's status (the refund sum only for a complete refund, a disputed payment stays `Disputed`).
+For a PayPal payment that is still `Open` (not executed) it reads the order: `Open` until the buyer approved it,
+`Authorized` once approved (call `execute()` to take the money; PayPal reserves nothing before, and the order expires
+by default 3 hours after it was created), `Cancelled` if it was voided or expired, and for an order executed meanwhile
+the state of its capture (the provider id changes to the capture). This lets a schedule complete payments of buyers who
+approved at PayPal but never returned.
 
 ## Tests
 Every provider behaviour is tested against the real test APIs (`tests/StripeTest.php`, `tests/PayPalTest.php`, base
@@ -150,3 +155,9 @@ disputes.
 Offline (`*OfflineTest.php`, `StatusTest.php`) is only what the providers can't produce on request: a completed Stripe
 Checkout, closed Stripe disputes, PayPal disputes, the return after a PayPal approval, rare capture statuses and failures (`tests/FakePayPal.php`
 replaces PayPal's SDK client).
+
+# Development
+To release
+```
+git add -A && git commit -m "4.5.0" && git tag 4.5.0 && git push origin master 4.5.0
+```
